@@ -1,0 +1,9 @@
+CREATE OR REPLACE TRIGGER students_cascade_delete
+    AFTER DELETE ON GROUPS
+    FOR EACH ROW
+BEGIN
+    DELETE FROM STUDENTS
+    WHERE GROUP_ID = :OLD.id;
+end;
+
+DROP TRIGGER students_cascade_delete;

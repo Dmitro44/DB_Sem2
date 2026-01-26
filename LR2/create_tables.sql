@@ -1,0 +1,17 @@
+CREATE TABLE Students (
+    id NUMBER,
+    group_id NUMBER,
+    name VARCHAR2(20)
+);
+
+CREATE TABLE GROUPS (
+    id NUMBER,
+    name VARCHAR2(30),
+    c_val NUMBER
+);
+
+-- DELETE
+DROP TABLE STUDENTS;
+DROP TABLE GROUPS;
+-- TRUNCATE TABLE Students;
+-- TRUNCATE TABLE GROUPS;
