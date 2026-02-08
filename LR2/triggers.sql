@@ -7,7 +7,8 @@ BEGIN
     SELECT COUNT(*)
     INTO v_count
     FROM STUDENTS
-    WHERE id = :NEW.id;
+    WHERE id = :NEW.id
+    AND (:OLD.id IS NULL OR id != :OLD.id);
 
     IF v_count > 0 THEN
         RAISE_APPLICATION_ERROR(-20004, 'Error: ID ' || :NEW.id || ' already exists in STUDENTS table');
@@ -51,7 +52,8 @@ BEGIN
     SELECT COUNT(*)
     INTO v_count
     FROM GROUPS
-    WHERE id = :NEW.id;
+    WHERE id = :NEW.id
+    AND (:OLD.id IS NULL OR id != :OLD.id);
 
     IF v_count > 0 THEN
         RAISE_APPLICATION_ERROR(-20004, 'Error: ID ' || :NEW.id || ' already exists in GROUPS table');
