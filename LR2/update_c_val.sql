@@ -21,5 +21,12 @@ BEGIN
             WHERE id = :NEW.group_id;
         END IF;
     END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        IF SQLCODE = -4091 THEN
+            NULL; -- Пропускаем ошибку мутации при каскадном удалении
+        ELSE
+            RAISE;
+        END IF;
 END;
 /
