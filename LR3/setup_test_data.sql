@@ -9,9 +9,12 @@
  * 3. Verify setup using queries at the end of this script
  *
  * SCHEMA DIFFERENCES (for testing):
- * - INSTRUCTORS table: EXISTS in DEV, MISSING in PROD (test: EXTRA_IN_PROD)
+ * - INSTRUCTORS table: EXISTS in DEV, MISSING in PROD (test: TABLE MISSING)
  * - STUDENTS.EMAIL column: EXISTS in DEV, MISSING in PROD (test: DIFFERENT)
  * - ENROLLMENTS.GRADE column: EXISTS in DEV, MISSING in PROD (test: DIFFERENT)
+ * - GET_STUDENT_COUNT procedure: EXISTS in DEV, MISSING in PROD (test: MISSING)
+ * - GET_DEPT_NAME function: EXISTS in DEV, MISSING in PROD (test: MISSING)
+ * - IDX_STUDENTS_NAME index: EXISTS in DEV, MISSING in PROD (test: MISSING)
  *
  * DEPENDENCY GRAPH (topological order):
  * Level 1: DEPARTMENTS (no dependencies)
@@ -134,6 +137,60 @@ INSERT INTO ENROLLMENTS VALUES (402, 101, 202, DATE '2024-09-01', 'B');
 INSERT INTO ENROLLMENTS VALUES (403, 102, 201, DATE '2024-09-02', 'A');
 INSERT INTO ENROLLMENTS VALUES (404, 103, 203, DATE '2024-09-01', 'A');
 
+-- Indexes (exist only in DEV)
+CREATE INDEX idx_students_email ON STUDENTS(EMAIL);
+
+-- Procedures (exist only in DEV)
+CREATE OR REPLACE PROCEDURE get_student_count(p_dept_id IN NUMBER, p_count OUT NUMBER) IS
+BEGIN
+    SELECT COUNT(*) INTO p_count FROM STUDENTS WHERE DEPT_ID = p_dept_id;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE add_student(
+    p_id IN NUMBER, p_first IN VARCHAR2, p_last IN VARCHAR2, 
+    p_email IN VARCHAR2, p_dept IN NUMBER
+) IS
+BEGIN
+    INSERT INTO STUDENTS VALUES (p_id, p_first, p_last, p_email, p_dept);
+    COMMIT;
+END;
+/
+
+-- Functions (exist only in DEV)
+CREATE OR REPLACE FUNCTION get_student_email(p_student_id IN NUMBER) RETURN VARCHAR2 IS
+    v_email VARCHAR2(100);
+BEGIN
+    SELECT EMAIL INTO v_email FROM STUDENTS WHERE STUDENT_ID = p_student_id;
+    RETURN v_email;
+END;
+/
+
+-- Package (exists only in DEV) - with unique functions not duplicating standalone
+CREATE OR REPLACE PACKAGE university_pkg AS
+    -- Подсчёт записей на курс
+    FUNCTION get_enrollment_count(p_course_id IN NUMBER) RETURN NUMBER;
+    -- Добавление нового департамента
+    PROCEDURE add_department(p_id IN NUMBER, p_name IN VARCHAR2, p_building IN VARCHAR2);
+END university_pkg;
+/
+
+CREATE OR REPLACE PACKAGE BODY university_pkg AS
+    FUNCTION get_enrollment_count(p_course_id IN NUMBER) RETURN NUMBER IS
+        v_count NUMBER;
+    BEGIN
+        SELECT COUNT(*) INTO v_count FROM ENROLLMENTS WHERE COURSE_ID = p_course_id;
+        RETURN v_count;
+    END;
+
+    PROCEDURE add_department(p_id IN NUMBER, p_name IN VARCHAR2, p_building IN VARCHAR2) IS
+    BEGIN
+        INSERT INTO DEPARTMENTS VALUES (p_id, p_name, p_building);
+        COMMIT;
+    END;
+END university_pkg;
+/
+
 COMMIT;
 
 -- Verification query for DEV_USER
@@ -141,6 +198,24 @@ SELECT 'DEV_USER SETUP COMPLETE' AS STATUS FROM DUAL;
 SELECT 'Tables created: ' || COUNT(*) AS TABLE_COUNT 
 FROM USER_TABLES 
 WHERE TABLE_NAME IN ('DEPARTMENTS', 'STUDENTS', 'COURSES', 'INSTRUCTORS', 'ENROLLMENTS');
+
+SELECT object_name, object_type FROM user_objects
+WHERE object_type IN ('PROCEDURE', 'FUNCTION', 'PACKAGE');
+
+SELECT object_name, object_type FROM all_procedures
+WHERE owner = 'DEV_USER' AND object_type IN ('PROCEDURE', 'FUNCTION');
+
+SELECT 'Procedures created: ' || COUNT(*) AS PROC_COUNT 
+FROM USER_PROCEDURES WHERE OBJECT_TYPE = 'PROCEDURE';
+
+SELECT 'Functions created: ' || COUNT(*) AS FUNC_COUNT 
+FROM USER_PROCEDURES WHERE OBJECT_TYPE = 'FUNCTION';
+
+SELECT 'Packages created: ' || COUNT(*) AS PKG_COUNT 
+FROM USER_OBJECTS WHERE OBJECT_TYPE = 'PACKAGE';
+
+SELECT 'Indexes created: ' || COUNT(*) AS IDX_COUNT 
+FROM USER_INDEXES WHERE INDEX_NAME NOT LIKE 'SYS_%';
 
 
 -------------------------------------------------------------------------------
@@ -172,6 +247,10 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN NULL;
 END;
 /
+
+CREATE TABLE OLD_TABLE (ID NUMBER);
+CREATE INDEX idx_old ON OLD_TABLE(ID);
+COMMIT;
 
 -- Level 1: Base table (identical to DEV)
 CREATE TABLE DEPARTMENTS (
@@ -291,13 +370,17 @@ SELECT COUNT(*) AS TOTAL_ROWS FROM ENROLLMENTS;
 
 /*
 -- Expected schema differences for testing:
--- 1. EXTRA_IN_PROD test: INSTRUCTORS exists in DEV but not in PROD
--- 2. DIFFERENT test (column level):
+-- 1. TABLE MISSING: INSTRUCTORS exists in DEV but not in PROD
+-- 2. DIFFERENT (column level):
 --    - STUDENTS.EMAIL exists in DEV, missing in PROD
 --    - ENROLLMENTS.GRADE exists in DEV, missing in PROD
+-- 3. PROCEDURE MISSING: GET_STUDENT_COUNT, ADD_STUDENT exist only in DEV
+-- 4. FUNCTION MISSING: GET_DEPT_NAME, GET_STUDENT_EMAIL exist only in DEV
+-- 5. INDEX MISSING: IDX_STUDENTS_NAME, IDX_STUDENTS_EMAIL exist only in DEV
+-- 6. PACKAGE MISSING: UNIVERSITY_PKG exists only in DEV
 --
--- Topological sort order should be:
--- 1. DEPARTMENTS (no dependencies)
--- 2. STUDENTS, COURSES, INSTRUCTORS (depend on DEPARTMENTS)
--- 3. ENROLLMENTS (depends on STUDENTS and COURSES)
+-- To test comparison function (as SYSTEM):
+-- SELECT obj_type, obj_name, status, details, sort_order 
+-- FROM TABLE(compare_schemas_oracle('DEV_USER', 'PROD_USER'))
+-- ORDER BY sort_order;
 */
