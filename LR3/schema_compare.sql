@@ -258,8 +258,14 @@ AS
     -- Получение DDL через DBMS_METADATA (для процедур, функций, пакетов)
     FUNCTION get_ddl_via_metadata(p_obj_type VARCHAR2, p_obj_name VARCHAR2, p_schema VARCHAR2) RETURN CLOB IS
         v_ddl CLOB;
+        v_schema_prefix VARCHAR2(128);
     BEGIN
         v_ddl := DBMS_METADATA.GET_DDL(p_obj_type, UPPER(p_obj_name), UPPER(p_schema));
+        -- Убираем имя схемы из DDL (например: "DEV_USER"."PROC" -> "PROC")
+        v_schema_prefix := '"' || UPPER(p_schema) || '".';
+        v_ddl := REPLACE(v_ddl, v_schema_prefix, '');
+        -- Также убираем EDITIONABLE если есть
+        v_ddl := REPLACE(v_ddl, 'EDITIONABLE ', '');
         RETURN v_ddl;
     EXCEPTION
         WHEN OTHERS THEN
