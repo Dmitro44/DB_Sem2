@@ -147,16 +147,6 @@ BEGIN
 END;
 /
 
-CREATE OR REPLACE PROCEDURE add_student(
-    p_id IN NUMBER, p_first IN VARCHAR2, p_last IN VARCHAR2, 
-    p_email IN VARCHAR2, p_dept IN NUMBER
-) IS
-BEGIN
-    INSERT INTO STUDENTS VALUES (p_id, p_first, p_last, p_email, p_dept);
-    COMMIT;
-END;
-/
-
 -- Functions (exist only in DEV)
 CREATE OR REPLACE FUNCTION get_student_email(p_student_id IN NUMBER) RETURN VARCHAR2 IS
     v_email VARCHAR2(100);

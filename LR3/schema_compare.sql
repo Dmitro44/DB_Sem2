@@ -97,18 +97,27 @@ AS
             END IF;
         END LOOP;
         
-        -- Добавляем PRIMARY KEY
+        -- Добавляем PRIMARY KEY (используем оригинальное имя constraint)
+        DECLARE
+            v_pk_constraint_name VARCHAR2(128);
         BEGIN
-            SELECT LISTAGG('"' || cc.column_name || '"', ', ') WITHIN GROUP (ORDER BY cc.position)
-            INTO v_pk_cols
+            SELECT c.constraint_name,
+                   LISTAGG('"' || cc.column_name || '"', ', ') WITHIN GROUP (ORDER BY cc.position)
+            INTO v_pk_constraint_name, v_pk_cols
             FROM all_constraints c
             JOIN all_cons_columns cc ON c.constraint_name = cc.constraint_name AND c.owner = cc.owner
             WHERE c.owner = UPPER(p_schema)
               AND c.table_name = UPPER(p_table_name)
-              AND c.constraint_type = 'P';
+              AND c.constraint_type = 'P'
+            GROUP BY c.constraint_name;
             
             IF v_pk_cols IS NOT NULL THEN
-                v_ddl := v_ddl || ',' || CHR(10) || '  CONSTRAINT "' || p_table_name || '_PK" PRIMARY KEY (' || v_pk_cols || ')';
+                -- Если имя constraint начинается с SYS_ (генерированное Oracle), не указываем имя
+                IF v_pk_constraint_name LIKE 'SYS_%' THEN
+                    v_ddl := v_ddl || ',' || CHR(10) || '  PRIMARY KEY (' || v_pk_cols || ')';
+                ELSE
+                    v_ddl := v_ddl || ',' || CHR(10) || '  CONSTRAINT "' || v_pk_constraint_name || '" PRIMARY KEY (' || v_pk_cols || ')';
+                END IF;
             END IF;
         EXCEPTION
             WHEN NO_DATA_FOUND THEN NULL;
