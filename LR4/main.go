@@ -48,7 +48,9 @@ func runMenu(rdb *redis.Client) {
 		fmt.Println("3. GetTopProducts")
 		fmt.Println("4. GetProductsByCategory")
 		fmt.Println("5. FilterProductsByPrice")
-		fmt.Println("6. Exit")
+		fmt.Println("6. GetRecommendations for user")
+		fmt.Println("7. VerifyRecommendations (debug)")
+		fmt.Println("8. Exit")
 		fmt.Print("\nChoose option: ")
 
 		choice, _ := r.ReadString('\n')
@@ -66,6 +68,10 @@ func runMenu(rdb *redis.Client) {
 		case "5":
 			handleGetProductsByPrice(r, &serv)
 		case "6":
+			handleGetRecommendations(r, &serv)
+		case "7":
+			handleVerifyRecommendations(r, &serv)
+		case "8":
 			fmt.Println("Goodbye!")
 			os.Exit(0)
 		default:
@@ -166,6 +172,90 @@ func handleGetProductsByPrice(r *bufio.Reader, serv *Service) {
 	fmt.Println(strings.Repeat("-", 65))
 	for _, p := range products {
 		fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+	}
+}
+
+func handleGetRecommendations(r *bufio.Reader, serv *Service) {
+	fmt.Print("Enter User ID: ")
+	idStr, _ := r.ReadString('\n')
+	idStr = strings.TrimSpace(idStr)
+	userID, _ := strconv.Atoi(idStr)
+
+	fmt.Print("Enter limit (default 10): ")
+	limStr, _ := r.ReadString('\n')
+	limStr = strings.TrimSpace(limStr)
+	limit, _ := strconv.ParseInt(limStr, 10, 64)
+	if limit <= 0 {
+		limit = 10
+	}
+
+	products, err := serv.GetSimilarUsersRecommendations(ctx, userID, limit)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	if len(products) == 0 {
+		fmt.Println("No recommendations found.")
+		return
+	}
+
+	fmt.Printf("\nRecommendations for user %d:\n", userID)
+	fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
+	fmt.Println(strings.Repeat("-", 65))
+	for _, p := range products {
+		fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+	}
+}
+
+func handleVerifyRecommendations(r *bufio.Reader, serv *Service) {
+	fmt.Print("Enter User ID to verify: ")
+	idStr, _ := r.ReadString('\n')
+	idStr = strings.TrimSpace(idStr)
+	userID, _ := strconv.Atoi(idStr)
+
+	userPurchasedKey := fmt.Sprintf("user:%d:purchased", userID)
+
+	fmt.Println("\n--- Step 1: User purchases ---")
+	userProducts, _ := serv.rdb.SMembers(ctx, userPurchasedKey).Result()
+	fmt.Printf("User %d purchased: %v\n", userID, userProducts)
+
+	fmt.Println("\n--- Step 2: Finding similar users ---")
+	allUserKeys, _ := serv.rdb.Keys(ctx, "user:*:purchased").Result()
+
+	fmt.Println("Checking similarity with other users:")
+	for _, key := range allUserKeys {
+		if key == userPurchasedKey {
+			continue
+		}
+		common, _ := serv.rdb.SInter(ctx, userPurchasedKey, key).Result()
+		if len(common) > 0 {
+			fmt.Printf("  Similar to %s: %v (common: %v)\n", key, common, common)
+		}
+	}
+
+	fmt.Println("\n--- Step 3: Union of similar users ---")
+	var similarUserKeys []string
+	for _, key := range allUserKeys {
+		if key == userPurchasedKey {
+			continue
+		}
+		common, _ := serv.rdb.SInter(ctx, userPurchasedKey, key).Result()
+		if len(common) > 0 {
+			similarUserKeys = append(similarUserKeys, key)
+		}
+	}
+
+	if len(similarUserKeys) > 0 {
+		union, _ := serv.rdb.SUnion(ctx, similarUserKeys...).Result()
+		fmt.Printf("Union: %v\n", union)
+	}
+
+	fmt.Println("\n--- Step 4: SDiff (final recommendations) ---")
+	recommendations, _ := serv.GetSimilarUsersRecommendations(ctx, userID, 10)
+	fmt.Printf("Final recommendations: %d items\n", len(recommendations))
+	for _, p := range recommendations {
+		fmt.Printf("  - %s (ID: %d, Price: %.2f)\n", p.Name, p.ProductID, p.Price)
 	}
 }
 
@@ -397,6 +487,24 @@ func migrateOrders(rdb *redis.Client) {
 // Migrate order items
 func migrateOrderItems(rdb *redis.Client) {
 	fmt.Println("  > Loading OrderItems...")
+
+	// First, build orderID -> userID mapping from orders
+	orderToUser := make(map[string]string)
+	ordersFile, err := os.Open("Data_csv/orderid-userid-createdat-status.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	ordersReader := csv.NewReader(ordersFile)
+	ordersRecords, err := ordersReader.ReadAll()
+	ordersFile.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, row := range ordersRecords[1:] {
+		orderToUser[row[0]] = row[1]
+	}
+
+	// Now process order items
 	file, err := os.Open("Data_csv/orderitemid-orderid-productid-quantity-price.csv")
 	if err != nil {
 		log.Fatal(err)
@@ -435,6 +543,13 @@ func migrateOrderItems(rdb *redis.Client) {
 		// Add item to order's set
 		orderItemsKey := fmt.Sprintf("order:%s:items", orderID)
 		rdb.SAdd(ctx, orderItemsKey, orderItemID)
+
+		// Add product to user's purchased set
+		userID, exists := orderToUser[orderID]
+		if exists {
+			purchasedKey := fmt.Sprintf("user:%s:purchased", userID)
+			rdb.SAdd(ctx, purchasedKey, productID)
+		}
 
 		count++
 	}

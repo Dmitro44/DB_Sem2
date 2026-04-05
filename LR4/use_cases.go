@@ -158,3 +158,93 @@ func (s *Service) GetProductsByPriceRange(ctx context.Context, minPrice, maxPric
 	}
 	return products, nil
 }
+
+func (s *Service) GetSimilarUsersRecommendations(ctx context.Context, userID int, limit int64) ([]Product, error) {
+	userPurchasedKey := fmt.Sprintf("user:%d:purchased", userID)
+
+	userProducts, err := s.rdb.SMembers(ctx, userPurchasedKey).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(userProducts) == 0 {
+		return []Product{}, nil
+	}
+
+	allUserKeys, err := s.rdb.Keys(ctx, "user:*:purchased").Result()
+	if err != nil {
+		return nil, err
+	}
+
+	var similarUserKeys []string
+
+	// Find similar users
+	for _, key := range allUserKeys {
+		if key == userPurchasedKey {
+			continue
+		}
+
+		// find common products
+		commonProducts, err := s.rdb.SInter(ctx, userPurchasedKey, key).Result()
+		if err != nil {
+			continue
+		}
+
+		if len(commonProducts) > 0 {
+			similarUserKeys = append(similarUserKeys, key)
+		}
+	}
+
+	if len(similarUserKeys) == 0 {
+		return []Product{}, nil
+	}
+
+	// Union all products from similar users
+	allSimilarProducts, err := s.rdb.SUnion(ctx, similarUserKeys...).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	// union in temp key for SDiff
+	tempKey := fmt.Sprintf("temp:recommendations:%d", userID)
+	s.rdb.Del(ctx, tempKey)
+
+	// Add all products to temporary set using pipeline for efficiency
+	pipe := s.rdb.Pipeline()
+	for _, p := range allSimilarProducts {
+		pipe.SAdd(ctx, tempKey, p)
+	}
+	_, err = pipe.Exec(ctx)
+	if err != nil {
+		s.rdb.Del(ctx, tempKey)
+		return nil, err
+	}
+
+	// remove products already purchased by user using SDiff
+	recommendations, err := s.rdb.SDiff(ctx, tempKey, userPurchasedKey).Result()
+	if err != nil {
+		s.rdb.Del(ctx, tempKey)
+		return nil, err
+	}
+
+	// clean up
+	s.rdb.Del(ctx, tempKey)
+
+	// Limit results
+	if int64(len(recommendations)) > limit {
+		recommendations = recommendations[:limit]
+	}
+
+	var products []Product
+	for _, productID := range recommendations {
+		var p Product
+		productKey := fmt.Sprintf("product:%s", productID)
+		err := s.rdb.HGetAll(ctx, productKey).Scan(&p)
+		if err != nil {
+			continue
+		}
+		products = append(products, p)
+	}
+
+	return products, nil
+}
