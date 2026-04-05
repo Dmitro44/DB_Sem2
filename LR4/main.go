@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/csv"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -19,16 +21,55 @@ func main() {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "", // no password
-		DB:       0,  // use default DB
+		DB:       0,
 	})
 
-	// Check connection
 	_, err := rdb.Ping(ctx).Result()
 	if err != nil {
 		log.Fatal("Failed to connect to Redis:", err)
 	}
 	fmt.Println("Connected to Redis successfully")
 
+	runMenu(rdb)
+
+}
+
+func runMenu(rdb *redis.Client) {
+	serv := Service{
+		rdb: rdb,
+	}
+
+	r := bufio.NewReader(os.Stdin)
+
+	for {
+		fmt.Println("\n========== Redis Lab 4 ==========")
+		fmt.Println("1. Flush DB and migrate")
+		fmt.Println("2. GetRecentOrders for user")
+		fmt.Println("3. GetRecentOrders for user")
+		fmt.Println("4. GetRecentOrders for user")
+		fmt.Println("5. GetRecentOrders for user")
+		fmt.Println("6. GetRecentOrders for user")
+		fmt.Println("7. Exit")
+		fmt.Print("\nChoose option: ")
+
+		choice, _ := r.ReadString('\n')
+		choice = strings.TrimSpace(choice)
+
+		switch choice {
+		case "1":
+			flushAndMigrate(rdb)
+		case "2":
+			handleGetRecentOrders(r, &serv)
+		case "7":
+			fmt.Println("Goodbye!")
+			os.Exit(0)
+		default:
+			fmt.Println("Invalid option, try again")
+		}
+	}
+}
+
+func flushAndMigrate(rdb *redis.Client) {
 	// Flush DB (optional - for repeated runs)
 	fmt.Println("Flushing database...")
 	rdb.FlushDB(ctx)
@@ -48,6 +89,39 @@ func main() {
 	fmt.Println("\nMigration completed successfully!")
 	fmt.Println("\nStatistics:")
 	printStats(rdb)
+}
+
+func handleGetRecentOrders(r *bufio.Reader, serv *Service) {
+	fmt.Print("Enter User ID: ")
+	idStr, _ := r.ReadString('\n')
+	idStr = strings.TrimSpace(idStr)
+	userID, _ := strconv.Atoi(idStr)
+
+	fmt.Print("Enter limit (default 10): ")
+	limStr, _ := r.ReadString('\n')
+	limStr = strings.TrimSpace(limStr)
+	limit, _ := strconv.ParseInt(limStr, 10, 64)
+	if limit <= 0 {
+		limit = 10
+	}
+
+	orders, err := serv.GetRecentOrders(ctx, userID, limit)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	if len(orders) == 0 {
+		fmt.Println("No orders found.")
+		return
+	}
+
+	fmt.Printf("\nRecent %d orders for user %d:\n", len(orders), userID)
+	fmt.Printf("%-10s | %-20s | %-10s\n", "Order ID", "Created At", "Status")
+	fmt.Println(strings.Repeat("-", 45))
+	for _, o := range orders {
+		fmt.Printf("%-10d | %-20s | %-10s\n", o.OrderId, o.CreatedAt, o.Status)
+	}
 }
 
 // Migrate users
@@ -71,7 +145,7 @@ func migrateUsers(rdb *redis.Client) {
 		key := fmt.Sprintf("user:%s", userID)
 
 		// Create Hash for user
-		err := rdb.HSet(ctx, key, map[string]interface{}{
+		err := rdb.HSet(ctx, key, map[string]any{
 			"user_id":    userID,
 			"name":       row[1],
 			"email":      row[2],
@@ -106,7 +180,7 @@ func migrateCategories(rdb *redis.Client) {
 		categoryID := row[0]
 		key := fmt.Sprintf("category:%s", categoryID)
 
-		err := rdb.HSet(ctx, key, map[string]interface{}{
+		err := rdb.HSet(ctx, key, map[string]any{
 			"category_id": categoryID,
 			"name":        row[1],
 		}).Err()
@@ -142,7 +216,7 @@ func migrateProducts(rdb *redis.Client) {
 		key := fmt.Sprintf("product:%s", productID)
 
 		// Hash for product
-		err := rdb.HSet(ctx, key, map[string]interface{}{
+		err := rdb.HSet(ctx, key, map[string]any{
 			"product_id":  productID,
 			"name":        row[1],
 			"category_id": categoryID,
@@ -194,7 +268,7 @@ func migrateOrders(rdb *redis.Client) {
 		key := fmt.Sprintf("order:%s", orderID)
 
 		// Hash for order
-		err := rdb.HSet(ctx, key, map[string]interface{}{
+		err := rdb.HSet(ctx, key, map[string]any{
 			"order_id":   orderID,
 			"user_id":    userID,
 			"created_at": createdAt,
@@ -247,7 +321,7 @@ func migrateOrderItems(rdb *redis.Client) {
 		key := fmt.Sprintf("order_item:%s", orderItemID)
 
 		// Hash for order item
-		err := rdb.HSet(ctx, key, map[string]interface{}{
+		err := rdb.HSet(ctx, key, map[string]any{
 			"order_item_id": orderItemID,
 			"order_id":      orderID,
 			"product_id":    productID,
