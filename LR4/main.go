@@ -304,10 +304,20 @@ func handleGetRecentOrders(r *bufio.Reader, serv *Service) {
 	}
 
 	fmt.Printf("\nRecent %d orders for user %d:\n", len(orders), userID)
-	fmt.Printf("%-10s | %-20s | %-10s\n", "Order ID", "Created At", "Status")
-	fmt.Println(strings.Repeat("-", 45))
+	fmt.Println(strings.Repeat("=", 70))
 	for _, o := range orders {
-		fmt.Printf("%-10d | %-20s | %-10s\n", o.OrderId, o.CreatedAt, o.Status)
+		fmt.Printf("Order #%d | %s | Status: %s\n", o.Order.OrderId, o.Order.CreatedAt, o.Order.Status)
+		fmt.Println(strings.Repeat("-", 50))
+		if len(o.Items) == 0 {
+			fmt.Println("  (no items)")
+		} else {
+			for _, item := range o.Items {
+				fmt.Printf("  |- Product: %s (ID: %d)\n", item.ProductName, item.ProductId)
+				fmt.Printf("  |  Quantity: %d | Price: %.2f | Total: %.2f\n",
+					item.Quantity, item.ProductPrice, float64(item.Quantity)*item.Price)
+			}
+		}
+		fmt.Println()
 	}
 }
 

@@ -30,14 +30,33 @@ type ProductStat struct {
 	Score   float64
 }
 
-func (s *Service) GetRecentOrders(ctx context.Context, userId int, limit int64) ([]Order, error) {
+type OrderItem struct {
+	OrderItemId int     `redis:"order_item_id"`
+	OrderId     int     `redis:"order_id"`
+	ProductId   int     `redis:"product_id"`
+	Quantity    int     `redis:"quantity"`
+	Price       float64 `redis:"price"`
+}
+
+type OrderWithItems struct {
+	Order Order
+	Items []OrderItemWithProduct
+}
+
+type OrderItemWithProduct struct {
+	OrderItem
+	ProductName  string
+	ProductPrice float64
+}
+
+func (s *Service) GetRecentOrders(ctx context.Context, userId int, limit int64) ([]OrderWithItems, error) {
 	key := fmt.Sprintf("user:%d:orders", userId)
 	orderIDs, err := s.rdb.LRange(ctx, key, 0, limit-1).Result()
 	if err != nil {
 		return nil, err
 	}
 
-	var orders []Order
+	var orders []OrderWithItems
 
 	for _, id := range orderIDs {
 		var order Order
@@ -47,7 +66,36 @@ func (s *Service) GetRecentOrders(ctx context.Context, userId int, limit int64) 
 		if err != nil {
 			return nil, err
 		}
-		orders = append(orders, order)
+
+		// Get order items
+		orderItemsKey := fmt.Sprintf("order:%s:items", id)
+		orderItemIDs, _ := s.rdb.SMembers(ctx, orderItemsKey).Result()
+
+		var items []OrderItemWithProduct
+		for _, itemID := range orderItemIDs {
+			var item OrderItem
+			itemKey := fmt.Sprintf("order_item:%s", itemID)
+			err := s.rdb.HGetAll(ctx, itemKey).Scan(&item)
+			if err != nil {
+				continue
+			}
+
+			// Get product details
+			var product Product
+			productKey := fmt.Sprintf("product:%d", item.ProductId)
+			s.rdb.HGetAll(ctx, productKey).Scan(&product)
+
+			items = append(items, OrderItemWithProduct{
+				OrderItem:    item,
+				ProductName:  product.Name,
+				ProductPrice: product.Price,
+			})
+		}
+
+		orders = append(orders, OrderWithItems{
+			Order: order,
+			Items: items,
+		})
 	}
 	return orders, nil
 }
