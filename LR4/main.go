@@ -45,7 +45,7 @@ func runMenu(rdb *redis.Client) {
 		fmt.Println("\n========== Redis Lab 4 ==========")
 		fmt.Println("1. Flush DB and migrate")
 		fmt.Println("2. GetRecentOrders for user")
-		fmt.Println("3. GetRecentOrders for user")
+		fmt.Println("3. GetTopProducts")
 		fmt.Println("4. GetRecentOrders for user")
 		fmt.Println("5. GetRecentOrders for user")
 		fmt.Println("6. GetRecentOrders for user")
@@ -60,6 +60,8 @@ func runMenu(rdb *redis.Client) {
 			flushAndMigrate(rdb)
 		case "2":
 			handleGetRecentOrders(r, &serv)
+		case "3":
+			handleGetTopProducts(r, &serv)
 		case "7":
 			fmt.Println("Goodbye!")
 			os.Exit(0)
@@ -69,12 +71,40 @@ func runMenu(rdb *redis.Client) {
 	}
 }
 
+func handleGetTopProducts(r *bufio.Reader, serv *Service) {
+	fmt.Print("Enter N (count): ")
+	nStr, _ := r.ReadString('\n')
+	nStr = strings.TrimSpace(nStr)
+	n, _ := strconv.ParseInt(nStr, 10, 64)
+	if n <= 0 {
+		n = 5
+	}
+
+	fmt.Print("Sort by (sales/revenue, default sales): ")
+	sortBy, _ := r.ReadString('\n')
+	sortBy = strings.TrimSpace(sortBy)
+	if sortBy != "revenue" {
+		sortBy = "sales"
+	}
+
+	stats, err := serv.GetTopProducts(ctx, n, sortBy)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	fmt.Printf("\nTop %d Products by %s:\n", len(stats), sortBy)
+	fmt.Printf("%-5s | %-30s | %-10s | %-10s\n", "ID", "Name", "Price", "Score")
+	fmt.Println(strings.Repeat("-", 60))
+	for _, s := range stats {
+		fmt.Printf("%-5d | %-30s | %-10.2f | %-10.2f\n", s.Product.ProductID, s.Product.Name, s.Product.Price, s.Score)
+	}
+}
+
 func flushAndMigrate(rdb *redis.Client) {
-	// Flush DB (optional - for repeated runs)
 	fmt.Println("Flushing database...")
 	rdb.FlushDB(ctx)
 
-	// Migrate data
 	fmt.Println("\nStarting data migration...")
 
 	migrateUsers(rdb)
@@ -83,7 +113,6 @@ func flushAndMigrate(rdb *redis.Client) {
 	migrateOrders(rdb)
 	migrateOrderItems(rdb)
 
-	// Build indexes and aggregates
 	buildIndexes(rdb)
 
 	fmt.Println("\nMigration completed successfully!")
