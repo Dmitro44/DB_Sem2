@@ -108,6 +108,15 @@ func handleGetTopProducts(r *bufio.Reader, serv *Service) {
 	for _, s := range stats {
 		fmt.Printf("%-5d | %-30s | %-10.2f | %-10.2f\n", s.Product.ProductID, s.Product.Name, s.Product.Price, s.Score)
 	}
+
+	// Show cache statistics
+	hits, misses := serv.GetCacheStats()
+	total := hits + misses
+	hitRate := 0.0
+	if total > 0 {
+		hitRate = float64(hits) / float64(total) * 100
+	}
+	fmt.Printf("\nCache Stats - Hits: %d | Misses: %d | Hit Rate: %.1f%%\n", hits, misses, hitRate)
 }
 
 func handleGetProductsByCategory(r *bufio.Reader, serv *Service) {

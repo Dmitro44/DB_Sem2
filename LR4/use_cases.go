@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
 type Service struct {
-	rdb *redis.Client
+	rdb         *redis.Client
+	CacheHits   int64
+	CacheMisses int64
 }
 
 type Order struct {
@@ -101,14 +105,29 @@ func (s *Service) GetRecentOrders(ctx context.Context, userId int, limit int64) 
 }
 
 func (s *Service) GetTopProducts(ctx context.Context, n int64, sortBy string) ([]ProductStat, error) {
-	var key string
-	if sortBy == "revenue" {
-		key = "products:by_revenue"
-	} else {
-		key = "products:by_sales"
+	cacheKey := fmt.Sprintf("cache:top_products:%s:%d", sortBy, n)
+
+	// Try to get from cache
+	cached, err := s.rdb.Get(ctx, cacheKey).Result()
+	if err == nil {
+		// Cache hit
+		s.CacheHits++
+		var stats []ProductStat
+		json.Unmarshal([]byte(cached), &stats)
+		return stats, nil
 	}
 
-	results, err := s.rdb.ZRevRangeWithScores(ctx, key, 0, n-1).Result()
+	// Cache miss
+	s.CacheMisses++
+
+	var zsetKey string
+	if sortBy == "revenue" {
+		zsetKey = "products:by_revenue"
+	} else {
+		zsetKey = "products:by_sales"
+	}
+
+	results, err := s.rdb.ZRevRangeWithScores(ctx, zsetKey, 0, n-1).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +149,20 @@ func (s *Service) GetTopProducts(ctx context.Context, n int64, sortBy string) ([
 		})
 	}
 
+	// Store in cache with 60-second TTL
+	data, _ := json.Marshal(stats)
+	s.rdb.Set(ctx, cacheKey, data, 60*time.Second)
+
 	return stats, nil
+}
+
+func (s *Service) GetCacheStats() (hits int64, misses int64) {
+	return s.CacheHits, s.CacheMisses
+}
+
+func (s *Service) ResetCacheStats() {
+	s.CacheHits = 0
+	s.CacheMisses = 0
 }
 
 func (s *Service) GetProductsByCategory(ctx context.Context, categoryID int, minPrice, maxPrice float64) ([]Product, error) {
