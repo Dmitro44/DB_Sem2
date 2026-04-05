@@ -46,10 +46,9 @@ func runMenu(rdb *redis.Client) {
 		fmt.Println("1. Flush DB and migrate")
 		fmt.Println("2. GetRecentOrders for user")
 		fmt.Println("3. GetTopProducts")
-		fmt.Println("4. GetRecentOrders for user")
-		fmt.Println("5. GetRecentOrders for user")
-		fmt.Println("6. GetRecentOrders for user")
-		fmt.Println("7. Exit")
+		fmt.Println("4. GetProductsByCategory")
+		fmt.Println("5. FilterProductsByPrice")
+		fmt.Println("6. Exit")
 		fmt.Print("\nChoose option: ")
 
 		choice, _ := r.ReadString('\n')
@@ -62,7 +61,11 @@ func runMenu(rdb *redis.Client) {
 			handleGetRecentOrders(r, &serv)
 		case "3":
 			handleGetTopProducts(r, &serv)
-		case "7":
+		case "4":
+			handleGetProductsByCategory(r, &serv)
+		case "5":
+			handleGetProductsByPrice(r, &serv)
+		case "6":
 			fmt.Println("Goodbye!")
 			os.Exit(0)
 		default:
@@ -98,6 +101,71 @@ func handleGetTopProducts(r *bufio.Reader, serv *Service) {
 	fmt.Println(strings.Repeat("-", 60))
 	for _, s := range stats {
 		fmt.Printf("%-5d | %-30s | %-10.2f | %-10.2f\n", s.Product.ProductID, s.Product.Name, s.Product.Price, s.Score)
+	}
+}
+
+func handleGetProductsByCategory(r *bufio.Reader, serv *Service) {
+	fmt.Print("Enter category ID: ")
+	idStr, _ := r.ReadString('\n')
+	idStr = strings.TrimSpace(idStr)
+	categoryID, _ := strconv.Atoi(idStr)
+
+	fmt.Print("Enter minimal price (0 for no filter): ")
+	minStr, _ := r.ReadString('\n')
+	minStr = strings.TrimSpace(minStr)
+	minPrice, _ := strconv.ParseFloat(minStr, 64)
+
+	fmt.Print("Enter maximal price (0 for no filter): ")
+	maxStr, _ := r.ReadString('\n')
+	maxStr = strings.TrimSpace(maxStr)
+	maxPrice, _ := strconv.ParseFloat(maxStr, 64)
+
+	products, err := serv.GetProductsByCategory(ctx, categoryID, minPrice, maxPrice)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	if len(products) == 0 {
+		fmt.Println("Products not found.")
+		return
+	}
+
+	fmt.Printf("\nProducts in category %d (Price filter: %.2f - %.2f):\n", categoryID, minPrice, maxPrice)
+	fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
+	fmt.Println(strings.Repeat("-", 65))
+	for _, p := range products {
+		fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+	}
+}
+
+func handleGetProductsByPrice(r *bufio.Reader, serv *Service) {
+	fmt.Print("Enter minimal price: ")
+	minStr, _ := r.ReadString('\n')
+	minStr = strings.TrimSpace(minStr)
+	minim, _ := strconv.ParseFloat(minStr, 64)
+
+	fmt.Print("Enter maximal price: ")
+	maxStr, _ := r.ReadString('\n')
+	maxStr = strings.TrimSpace(maxStr)
+	maxim, _ := strconv.ParseFloat(maxStr, 64)
+
+	products, err := serv.GetProductsByPriceRange(ctx, minim, maxim)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	if len(products) == 0 {
+		fmt.Println("Products in this range not found.")
+		return
+	}
+
+	fmt.Printf("\nProducts in range from %.2f to %.2f:\n", minim, maxim)
+	fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
+	fmt.Println(strings.Repeat("-", 65))
+	for _, p := range products {
+		fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
 	}
 }
 
@@ -257,12 +325,13 @@ func migrateProducts(rdb *redis.Client) {
 			continue
 		}
 
-		// Add product to category set
 		categoryKey := fmt.Sprintf("category:%s:products", categoryID)
-		rdb.SAdd(ctx, categoryKey, productID)
-
-		// Add to Sorted Set by price
 		priceFloat, _ := strconv.ParseFloat(price, 64)
+		rdb.ZAdd(ctx, categoryKey, redis.Z{
+			Score:  priceFloat,
+			Member: productID,
+		})
+
 		rdb.ZAdd(ctx, "products:by_price", redis.Z{
 			Score:  priceFloat,
 			Member: productID,

@@ -84,3 +84,77 @@ func (s *Service) GetTopProducts(ctx context.Context, n int64, sortBy string) ([
 
 	return stats, nil
 }
+
+func (s *Service) GetProductsByCategory(ctx context.Context, categoryID int, minPrice, maxPrice float64) ([]Product, error) {
+	key := fmt.Sprintf("category:%d:products", categoryID)
+
+	var start, stop any
+	start = "-inf"
+	stop = "+inf"
+
+	if minPrice > 0 {
+		start = minPrice
+	}
+	if maxPrice > 0 {
+		stop = maxPrice
+	}
+
+	productIDs, err := s.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     key,
+		ByScore: true,
+		Start:   start,
+		Stop:    stop,
+	}).Result()
+
+	if err != nil {
+		return nil, err
+	}
+
+	var products []Product
+	for _, id := range productIDs {
+		var product Product
+		productKey := fmt.Sprintf("product:%s", id)
+
+		err := s.rdb.HGetAll(ctx, productKey).Scan(&product)
+		if err != nil {
+			continue
+		}
+		products = append(products, product)
+	}
+	return products, nil
+}
+
+func (s *Service) GetProductsByPriceRange(ctx context.Context, minPrice, maxPrice float64) ([]Product, error) {
+	var start, stop any
+	start = "-inf"
+	stop = "+inf"
+
+	if minPrice > 0 {
+		start = minPrice
+	}
+	if maxPrice > 0 {
+		stop = maxPrice
+	}
+	results, err := s.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     "products:by_price",
+		ByScore: true,
+		Start:   start,
+		Stop:    stop,
+	}).Result()
+
+	if err != nil {
+		return nil, err
+	}
+
+	var products []Product
+	for _, id := range results {
+		var p Product
+		productKey := fmt.Sprintf("product:%s", id)
+		err := s.rdb.HGetAll(ctx, productKey).Scan(&p)
+		if err != nil {
+			continue
+		}
+		products = append(products, p)
+	}
+	return products, nil
+}
