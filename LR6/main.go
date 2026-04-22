@@ -3,11 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/csv"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -16,9 +19,11 @@ func main() {
 	uri := "mongodb://admin:password@localhost:27017/lr6_db"
 	mongoClient, _ := mongo.Connect(options.Client().ApplyURI(uri))
 
+	runMenu(mongoClient)
 }
 
-func runMenu(mdb *mongo.Client) {
+func runMenu(mcl *mongo.Client) {
+	mdb := mcl.Database("lr6_db")
 
 	r := bufio.NewReader(os.Stdin)
 
@@ -61,13 +66,188 @@ func runMenu(mdb *mongo.Client) {
 	}
 }
 
-func flushAndMigrate(mdb *mongo.Client) {
+func flushAndMigrate(mdb *mongo.Database) {
 	ctx := context.Background()
-	dbName := ""
-	err := mdb.Database(dbName).Drop(ctx)
+	err := mdb.Drop(ctx)
 	if err != nil {
 		log.Fatalf("failed to drop database: %v", err)
 	}
 	fmt.Println("Database flushed")
 
+	migrateUsers(ctx, mdb)
+	migrateCategories(ctx, mdb)
+	migrateProducts(ctx, mdb)
+	migrateOrdersAndItems(ctx, mdb)
+}
+
+func migrateUsers(ctx context.Context, mdb *mongo.Database) {
+	file, err := os.Open("Data_csv/userid-name-email-createdat.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	collection := mdb.Collection("users")
+
+	count := 0
+	for _, row := range records[1:] {
+		userID := row[0]
+
+		user := bson.D{
+			{"userId", userID},
+			{"name", row[1]},
+			{"email", row[2]},
+			{"createdAt", row[3]},
+		}
+
+		_, err := collection.InsertOne(ctx, user)
+		if err != nil {
+			log.Printf("Error adding user:%s: %v", userID, err)
+		}
+		count++
+	}
+	fmt.Printf("    Loaded users: %d\n", count)
+}
+
+func migrateCategories(ctx context.Context, mdb *mongo.Database) {
+	file, err := os.Open("Data_csv/categoryid-name.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	collection := mdb.Collection("categories")
+
+	count := 0
+	for _, row := range records[1:] {
+		categoryID := row[0]
+
+		category := bson.D{
+			{"categoryId", categoryID},
+			{"name", row[1]},
+		}
+
+		_, err := collection.InsertOne(ctx, category)
+		if err != nil {
+			log.Printf("Error adding category:%s: %v", categoryID, err)
+		}
+		count++
+	}
+	fmt.Printf("    Loaded categories: %d\n", count)
+}
+
+func migrateProducts(ctx context.Context, mdb *mongo.Database) {
+	file, err := os.Open("Data_csv/productid-name-categoryid-price.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	collection := mdb.Collection("products")
+
+	count := 0
+	for _, row := range records[1:] {
+		productID := row[0]
+		price, _ := strconv.ParseFloat(row[3], 64)
+
+		product := bson.D{
+			{"productId", productID},
+			{"name", row[1]},
+			{"categoryId", row[2]},
+			{"price", price},
+		}
+
+		_, err := collection.InsertOne(ctx, product)
+		if err != nil {
+			log.Printf("Error adding product:%s: %v", productID, err)
+		}
+		count++
+	}
+	fmt.Printf("    Loaded products: %d\n", count)
+}
+
+func migrateOrdersAndItems(ctx context.Context, mdb *mongo.Database) {
+	//Items
+	file, err := os.Open("Data_csv/orderitemid-orderid-productid-quantity-price.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	reader := csv.NewReader(file)
+	itemRecords, err := reader.ReadAll()
+	if err != nil {
+		log.Fatal(err)
+	}
+	file.Close()
+
+	items := make(map[string][]bson.D, len(itemRecords))
+	for _, row := range itemRecords[1:] {
+		orderID := row[1]
+		quantity, _ := strconv.ParseInt(row[3], 10, 64)
+		price, _ := strconv.ParseFloat(row[4], 64)
+
+		items[orderID] = append(items[orderID], bson.D{
+			{"orderItemId", row[0]},
+			{"productId", row[2]},
+			{"quantity", quantity},
+			{"price", price},
+		})
+	}
+
+	//Orders
+	file, err = os.Open("Data_csv/orderid-userid-createdat-status.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	reader = csv.NewReader(file)
+	itemRecords, err = reader.ReadAll()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	collection := mdb.Collection("orders")
+
+	count := 0
+	for _, row := range itemRecords[1:] {
+		orderID := row[0]
+
+		itemsForOrder := items[orderID]
+		if itemsForOrder == nil {
+			itemsForOrder = []bson.D{}
+		}
+
+		order := bson.D{
+			{"orderId", orderID},
+			{"userId", row[1]},
+			{"createdAt", row[2]},
+			{"status", row[3]},
+			{"items", itemsForOrder},
+		}
+		_, err := collection.InsertOne(ctx, order)
+		if err != nil {
+			log.Printf("Error adding order:%s: %v", orderID, err)
+		}
+		count++
+	}
+	fmt.Printf("    Loaded orders: %d\n", count)
 }
