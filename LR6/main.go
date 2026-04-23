@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	uri := "mongodb://admin:password@localhost:27017/lr6_db"
+	uri := "mongodb://admin:password@localhost:27017/lr6_db?authSource=admin"
 	mongoClient, _ := mongo.Connect(options.Client().ApplyURI(uri))
 
 	runMenu(mongoClient)
@@ -24,14 +24,18 @@ func main() {
 
 func runMenu(mcl *mongo.Client) {
 	mdb := mcl.Database("lr6_db")
+	serv := Service{
+		mdb: mdb,
+	}
+	ctx := context.Background()
 
 	r := bufio.NewReader(os.Stdin)
 
 	for {
 		fmt.Println("\n========== Mongo Lab 6 ==========")
 		fmt.Println("1. Flush DB and migrate")
-		fmt.Println("2. GetRecentOrders for user")
-		fmt.Println("3. GetTopProducts")
+		fmt.Println("2. Run Integrity Checks")
+		fmt.Println("3. GetUserOrders")
 		fmt.Println("4. GetProductsByCategory")
 		fmt.Println("5. FilterProductsByPrice")
 		fmt.Println("6. GetRecommendations for user")
@@ -48,18 +52,18 @@ func runMenu(mcl *mongo.Client) {
 		case "2":
 			runIntegrityChecks(mdb)
 		case "3":
-			handleGetRecentOrders(r, &serv)
-		case "3":
-			handleGetTopProducts(r, &serv)
-		case "4":
-			handleGetProductsByCategory(r, &serv)
-		case "5":
-			handleGetProductsByPrice(r, &serv)
-		case "6":
-			handleGetRecommendations(r, &serv)
-		case "7":
-			handleVerifyRecommendations(r, &serv)
-		case "8":
+			handleGetUserOrders(ctx, r, &serv)
+		// case "4":
+		// 	handleGetTopProducts(r, &serv)
+		// case "5":
+		// 	handleGetProductsByCategory(r, &serv)
+		// case "6":
+		// 	handleGetProductsByPrice(r, &serv)
+		// case "7":
+		// 	handleGetRecommendations(r, &serv)
+		// case "8":
+		// 	handleVerifyRecommendations(r, &serv)
+		case "9":
 			fmt.Println("Goodbye!")
 			os.Exit(0)
 		default:
@@ -100,7 +104,7 @@ func migrateUsers(ctx context.Context, mdb *mongo.Database) {
 
 	count := 0
 	for _, row := range records[1:] {
-		userID := row[0]
+		userID, _ := strconv.Atoi(row[0])
 
 		user := bson.D{
 			{"userId", userID},
@@ -135,7 +139,7 @@ func migrateCategories(ctx context.Context, mdb *mongo.Database) {
 
 	count := 0
 	for _, row := range records[1:] {
-		categoryID := row[0]
+		categoryID, _ := strconv.Atoi(row[0])
 
 		category := bson.D{
 			{"categoryId", categoryID},
@@ -168,7 +172,7 @@ func migrateProducts(ctx context.Context, mdb *mongo.Database) {
 
 	count := 0
 	for _, row := range records[1:] {
-		productID := row[0]
+		productID, _ := strconv.Atoi(row[0])
 		price, _ := strconv.ParseFloat(row[3], 64)
 
 		product := bson.D{
@@ -201,15 +205,18 @@ func migrateOrdersAndItems(ctx context.Context, mdb *mongo.Database) {
 	}
 	file.Close()
 
-	items := make(map[string][]bson.D, len(itemRecords))
+	items := make(map[int][]bson.D, len(itemRecords))
 	for _, row := range itemRecords[1:] {
-		orderID := row[1]
+		orderID, _ := strconv.Atoi(row[1])
+		orderItemID, _ := strconv.Atoi(row[0])
+		productID, _ := strconv.Atoi(row[2])
+
 		quantity, _ := strconv.ParseInt(row[3], 10, 64)
 		price, _ := strconv.ParseFloat(row[4], 64)
 
 		items[orderID] = append(items[orderID], bson.D{
-			{"orderItemId", row[0]},
-			{"productId", row[2]},
+			{"orderItemId", orderItemID},
+			{"productId", productID},
 			{"quantity", quantity},
 			{"price", price},
 		})
@@ -232,7 +239,8 @@ func migrateOrdersAndItems(ctx context.Context, mdb *mongo.Database) {
 
 	count := 0
 	for _, row := range itemRecords[1:] {
-		orderID := row[0]
+		orderID, _ := strconv.Atoi(row[0])
+		userID, _ := strconv.Atoi(row[1])
 
 		itemsForOrder := items[orderID]
 		if itemsForOrder == nil {
@@ -241,7 +249,7 @@ func migrateOrdersAndItems(ctx context.Context, mdb *mongo.Database) {
 
 		order := bson.D{
 			{"orderId", orderID},
-			{"userId", row[1]},
+			{"userId", userID},
 			{"createdAt", row[2]},
 			{"status", row[3]},
 			{"items", itemsForOrder},
@@ -327,5 +335,41 @@ func runIntegrityChecks(mdb *mongo.Database) {
 		} else {
 			fmt.Println("No orders found with total price > 1000.")
 		}
+	}
+}
+
+func handleGetUserOrders(ctx context.Context, r *bufio.Reader, serv *Service) {
+
+	fmt.Print("Provide user id: ")
+	idStr, _ := r.ReadString('\n')
+	idStr = strings.TrimSpace(idStr)
+	userId, _ := strconv.Atoi(idStr)
+
+	orders, err := serv.GetUserOrders(ctx, userId)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	if len(orders) == 0 {
+		fmt.Println("No orders found.")
+		return
+	}
+
+	fmt.Printf("\nFound %d orders for user %d:\n", len(orders), userId)
+	for _, o := range orders {
+		fmt.Printf("\nOrder ID:  %d\n", o.ID)
+		fmt.Printf("Date:      %s\n", o.CreatedAt)
+		fmt.Printf("Status:    %s\n", o.Status)
+		fmt.Printf("Items:\n")
+		var orderTotal float64
+		for _, item := range o.Items {
+			lineTotal := float64(item.Quantity) * item.Price
+			orderTotal += lineTotal
+			fmt.Printf("  - Product ID: %-5d | Qty: %-2d | Price: %-8.2f | Total: %.2f\n",
+				item.ProductID, item.Quantity, item.Price, lineTotal)
+		}
+		fmt.Printf("Total Amount: %.2f\n", orderTotal)
+		fmt.Println(strings.Repeat("-", 45))
 	}
 }
