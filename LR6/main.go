@@ -46,6 +46,8 @@ func runMenu(mcl *mongo.Client) {
 		case "1":
 			flushAndMigrate(mdb)
 		case "2":
+			runIntegrityChecks(mdb)
+		case "3":
 			handleGetRecentOrders(r, &serv)
 		case "3":
 			handleGetTopProducts(r, &serv)
@@ -74,6 +76,7 @@ func flushAndMigrate(mdb *mongo.Database) {
 	}
 	fmt.Println("Database flushed")
 
+	fmt.Println("Migration started")
 	migrateUsers(ctx, mdb)
 	migrateCategories(ctx, mdb)
 	migrateProducts(ctx, mdb)
@@ -250,4 +253,79 @@ func migrateOrdersAndItems(ctx context.Context, mdb *mongo.Database) {
 		count++
 	}
 	fmt.Printf("    Loaded orders: %d\n", count)
+}
+
+func runIntegrityChecks(mdb *mongo.Database) {
+	ctx := context.Background()
+	fmt.Println("\n--- Data Integrity Checks ---")
+
+	// Count documents in each collection
+	collections := []string{"users", "categories", "products", "orders"}
+	for _, collName := range collections {
+		count, err := mdb.Collection(collName).CountDocuments(ctx, bson.D{})
+		if err != nil {
+			log.Printf("Error counting %s: %v", collName, err)
+			continue
+		}
+		fmt.Printf("Collection %s: %d documents\n", collName, count)
+	}
+
+	// Validate user_id in orders via $lookup
+	pipeline := mongo.Pipeline{
+		{{Key: "$lookup", Value: bson.D{
+			{Key: "from", Value: "users"},
+			{Key: "localField", Value: "userId"},
+			{Key: "foreignField", Value: "userId"},
+			{Key: "as", Value: "user_details"},
+		}}},
+		{{Key: "$match", Value: bson.D{
+			{Key: "user_details", Value: bson.D{{Key: "$size", Value: 0}}},
+		}}},
+		{{Key: "$count", Value: "invalid_orders_count"}},
+	}
+
+	cursor, err := mdb.Collection("orders").Aggregate(ctx, pipeline)
+	if err != nil {
+		log.Printf("Integrity check for orders failed: %v", err)
+	} else {
+		var results []bson.M
+		if err = cursor.All(ctx, &results); err == nil && len(results) > 0 {
+			fmt.Printf("Invalid orders (missing user): %v\n", results[0]["invalid_orders_count"])
+		} else {
+			fmt.Println("All orders have valid user_id references.")
+		}
+	}
+
+	// Find orders with total price > 1000
+	totalPipeline := mongo.Pipeline{
+		{{Key: "$addFields", Value: bson.D{
+			{Key: "calculated_total", Value: bson.D{
+				{Key: "$sum", Value: bson.D{
+					{Key: "$map", Value: bson.D{
+						{Key: "input", Value: "$items"},
+						{Key: "as", Value: "item"},
+						{Key: "in", Value: bson.D{
+							{Key: "$multiply", Value: bson.A{"$$item.quantity", "$$item.price"}},
+						}},
+					}},
+				}},
+			}},
+		}}},
+		{{Key: "$match", Value: bson.D{
+			{Key: "calculated_total", Value: bson.D{{Key: "$gt", Value: 1000}}},
+		}}},
+		{{Key: "$count", Value: "expensive_orders_count"}},
+	}
+
+	cursor, err = mdb.Collection("orders").Aggregate(ctx, totalPipeline)
+	if err != nil {
+		log.Printf("Integrity check orders with total price failed: %v", err)
+	} else {
+		var results []bson.M
+		if err = cursor.All(ctx, &results); err == nil && len(results) > 0 {
+			fmt.Printf("Orders with total price > 1000: %v\n", results[0]["expensive_orders_count"])
+		} else {
+			fmt.Println("No orders found with total price > 1000.")
+		}
+	}
 }
