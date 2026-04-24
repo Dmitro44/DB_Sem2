@@ -107,7 +107,7 @@ func migrateUsers(ctx context.Context, mdb *mongo.Database) {
 		userID, _ := strconv.Atoi(row[0])
 
 		user := bson.D{
-			{"userId", userID},
+			{"id", userID},
 			{"name", row[1]},
 			{"email", row[2]},
 			{"createdAt", row[3]},
@@ -142,7 +142,7 @@ func migrateCategories(ctx context.Context, mdb *mongo.Database) {
 		categoryID, _ := strconv.Atoi(row[0])
 
 		category := bson.D{
-			{"categoryId", categoryID},
+			{"id", categoryID},
 			{"name", row[1]},
 		}
 
@@ -176,7 +176,7 @@ func migrateProducts(ctx context.Context, mdb *mongo.Database) {
 		price, _ := strconv.ParseFloat(row[3], 64)
 
 		product := bson.D{
-			{"productId", productID},
+			{"id", productID},
 			{"name", row[1]},
 			{"categoryId", row[2]},
 			{"price", price},
@@ -215,7 +215,7 @@ func migrateOrdersAndItems(ctx context.Context, mdb *mongo.Database) {
 		price, _ := strconv.ParseFloat(row[4], 64)
 
 		items[orderID] = append(items[orderID], bson.D{
-			{"orderItemId", orderItemID},
+			{"id", orderItemID},
 			{"productId", productID},
 			{"quantity", quantity},
 			{"price", price},
@@ -248,7 +248,7 @@ func migrateOrdersAndItems(ctx context.Context, mdb *mongo.Database) {
 		}
 
 		order := bson.D{
-			{"orderId", orderID},
+			{"id", orderID},
 			{"userId", userID},
 			{"createdAt", row[2]},
 			{"status", row[3]},
@@ -283,7 +283,7 @@ func runIntegrityChecks(mdb *mongo.Database) {
 		{{Key: "$lookup", Value: bson.D{
 			{Key: "from", Value: "users"},
 			{Key: "localField", Value: "userId"},
-			{Key: "foreignField", Value: "userId"},
+			{Key: "foreignField", Value: "id"},
 			{Key: "as", Value: "user_details"},
 		}}},
 		{{Key: "$match", Value: bson.D{
