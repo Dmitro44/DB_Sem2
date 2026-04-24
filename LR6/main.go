@@ -36,7 +36,7 @@ func runMenu(mcl *mongo.Client) {
 		fmt.Println("1. Flush DB and migrate")
 		fmt.Println("2. Run Integrity Checks")
 		fmt.Println("3. GetUserOrders")
-		fmt.Println("4. GetProductsByCategory")
+		fmt.Println("4. GetOrdersWithDetails")
 		fmt.Println("5. FilterProductsByPrice")
 		fmt.Println("6. GetRecommendations for user")
 		fmt.Println("7. VerifyRecommendations (debug)")
@@ -53,8 +53,8 @@ func runMenu(mcl *mongo.Client) {
 			runIntegrityChecks(mdb)
 		case "3":
 			handleGetUserOrders(ctx, r, &serv)
-		// case "4":
-		// 	handleGetTopProducts(r, &serv)
+		case "4":
+			handleGetOrdersWithDetails(ctx, r, &serv)
 		// case "5":
 		// 	handleGetProductsByCategory(r, &serv)
 		// case "6":
@@ -367,14 +367,45 @@ func handleGetUserOrders(ctx context.Context, r *bufio.Reader, serv *Service) {
 		fmt.Printf("Date:      %s\n", o.CreatedAt)
 		fmt.Printf("Status:    %s\n", o.Status)
 		fmt.Printf("Items:\n")
+		fmt.Println(strings.Repeat("-", 45))
+	}
+}
+
+func handleGetOrdersWithDetails(ctx context.Context, r *bufio.Reader, serv *Service) {
+	fmt.Println("Provide order id: ")
+	idStr, _ := r.ReadString('\n')
+	idStr = strings.TrimSpace(idStr)
+	orderId, _ := strconv.Atoi(idStr)
+
+	orders, err := serv.GetOrdersWithDetails(ctx, orderId)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	if len(orders) == 0 {
+		fmt.Println("No orders found.")
+		return
+	}
+
+	for _, o := range orders {
+		fmt.Printf("\nOrder ID:  %d\n", o.ID)
+		fmt.Printf("User ID:   %d\n", o.UserID)
+		fmt.Printf("Date:      %s\n", o.CreatedAt)
+		fmt.Printf("Status:    %s\n", o.Status)
+		fmt.Printf("Items Details:\n")
 		var orderTotal float64
 		for _, item := range o.Items {
 			lineTotal := float64(item.Quantity) * item.Price
 			orderTotal += lineTotal
-			fmt.Printf("  - Product ID: %-5d | Qty: %-2d | Price: %-8.2f | Total: %.2f\n",
-				item.ProductID, item.Quantity, item.Price, lineTotal)
+			productName := item.ProductDetails.Name
+			if productName == "" {
+				productName = "Unknown Product"
+			}
+			fmt.Printf("  - %-20s | Qty: %-2d | Price: %-8.2f | Total: %.2f\n",
+				productName, item.Quantity, item.Price, lineTotal)
 		}
 		fmt.Printf("Total Amount: %.2f\n", orderTotal)
-		fmt.Println(strings.Repeat("-", 45))
+		fmt.Println(strings.Repeat("-", 55))
 	}
 }
