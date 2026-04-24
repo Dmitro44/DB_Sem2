@@ -12,6 +12,7 @@
 + #[Реализовать получение топа товаров по объему продаж и по выручке. Внедрить механизм кэширования результатов с заданным временем жизни (#emph("TTL")).]
 + #[Реализовать фильтрацию товаров по категориям и диапазону цен с использованием упорядоченных множеств (#emph("Sorted Sets")).]
 + #[Разработать систему рекомендаций на основе поиска похожих пользователей, используя теоретико-множественные операции (#emph("SINTER"), #emph("SUNION"), #emph("SDIFF")).]
++ #[Реализовать аналогичные запросы в реляционной СУБД (#emph("PostgreSQL")) для демонстрации различий между подходами к обработке данных.]
 
 = Краткие теоретические сведения
 
@@ -70,6 +71,29 @@
 
 Метод #emph("GetRecentOrders") выполняет сопоставление связанных сущностей. Сначала извлекаются идентификаторы заказов из списка пользователя (#emph("List")), затем для каждого заказа запрашиваются его атрибуты из #emph("Hash"), позиции из множества (#emph("Set")) и детальная информация о товарах.
 
+#stp2024.listing[GetRecentOrders в Redis][
+  ```go
+  orderIDs, _ := s.rdb.LRange(ctx, key, 0, limit-1).Result()
+  for _, id := range orderIDs {
+      s.rdb.HGetAll(ctx, fmt.Sprintf("order:%s", id)).Scan(&order)
+      orderItemIDs, _ := s.rdb.SMembers(ctx, fmt.Sprintf("order:%s:items", id)).Result()
+      // ...
+  }
+  ```
+]
+
+Аналогичный запрос в PostgreSQL:
+
+#stp2024.listing[GetRecentOrders в PostgreSQL][
+  ```sql
+  SELECT order_id, user_id, created_at, status 
+  FROM orders 
+  WHERE user_id = $1 
+  ORDER BY created_at DESC 
+  LIMIT $2
+  ```
+]
+
 == Кэширование популярных товаров
 
 Метод #emph("GetTopProducts") возвращает список наиболее продаваемых товаров. Для оптимизации используется строковый ключ с параметрами запроса. Если данные присутствуют в кэше, они возвращаются немедленно. В противном случае выполняется выборка из #emph("ZSet") (#emph("ZREVRANGE")), данные сериализуются в #emph("JSON") и сохраняются в кэш на 60 секунд.
@@ -96,6 +120,30 @@
 
 Для реализации функции #emph("GetProductsByCategory") использовались упорядоченные множества, где ключом выступает идентификатор категории, а весом — цена товара. Это позволяет эффективно ограничивать выборку диапазоном цен с помощью команды #emph("ZRANGEBYSCORE").
 
+#stp2024.listing[GetProductsByCategory в Redis][
+  ```go
+  productIDs, _ := s.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+      Key:     fmt.Sprintf("category:%d:products", categoryID),
+      ByScore: true,
+      Start:   minPrice,
+      Stop:    maxPrice,
+  }).Result()
+  ```
+]
+
+Аналогичный запрос в PostgreSQL:
+
+#stp2024.listing[GetProductsByCategory в PostgreSQL][
+  ```sql
+  SELECT product_id, name, category_id, price 
+  FROM products 
+  WHERE category_id = $1
+    AND price >= $2
+    AND price <= $3
+  ORDER BY price ASC
+  ```
+]
+
 == Система рекомендаций похожим пользователям
 
 Алгоритм рекомендаций основан на анализе покупок. Процесс включает следующие этапы:
@@ -115,6 +163,37 @@
   
   // Вычитание уже купленных товаров
   recommendations, _ := s.rdb.SDiff(ctx, tempKey, userPurchasedKey).Result()
+  ```
+]
+
+Аналогичный запрос в PostgreSQL с использованием CTE:
+
+#stp2024.listing[Рекомендации в PostgreSQL][
+  ```sql
+  WITH target_user_products AS (
+      SELECT DISTINCT product_id
+      FROM order_items oi
+      JOIN orders o ON oi.order_id = o.order_id
+      WHERE o.user_id = $1
+  ),
+  similar_users AS (
+      SELECT DISTINCT o.user_id
+      FROM orders o
+      JOIN order_items oi ON o.order_id = oi.order_id
+      WHERE oi.product_id IN (SELECT product_id FROM target_user_products)
+        AND o.user_id != $1
+  ),
+  recommended_products AS (
+      SELECT DISTINCT oi.product_id
+      FROM order_items oi
+      JOIN orders o ON oi.order_id = o.order_id
+      WHERE o.user_id IN (SELECT user_id FROM similar_users)
+        AND oi.product_id NOT IN (SELECT product_id FROM target_user_products)
+  )
+  SELECT p.product_id, p.name, p.category_id, p.price
+  FROM products p
+  JOIN recommended_products rp ON p.product_id = rp.product_id
+  LIMIT $2
   ```
 ]
 
