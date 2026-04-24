@@ -84,7 +84,8 @@ func flushAndMigrate(mdb *mongo.Database) {
 	migrateUsers(ctx, mdb)
 	migrateCategories(ctx, mdb)
 	migrateProducts(ctx, mdb)
-	migrateOrdersAndItems(ctx, mdb)
+	migrateOrders(ctx, mdb)
+	migrateOrderItems(ctx, mdb)
 }
 
 func migrateUsers(ctx context.Context, mdb *mongo.Database) {
@@ -107,7 +108,7 @@ func migrateUsers(ctx context.Context, mdb *mongo.Database) {
 		userID, _ := strconv.Atoi(row[0])
 
 		user := bson.D{
-			{"id", userID},
+			{"_id", userID},
 			{"name", row[1]},
 			{"email", row[2]},
 			{"createdAt", row[3]},
@@ -115,7 +116,7 @@ func migrateUsers(ctx context.Context, mdb *mongo.Database) {
 
 		_, err := collection.InsertOne(ctx, user)
 		if err != nil {
-			log.Printf("Error adding user:%s: %v", userID, err)
+			log.Printf("Error adding user:%d: %v", userID, err)
 		}
 		count++
 	}
@@ -142,13 +143,13 @@ func migrateCategories(ctx context.Context, mdb *mongo.Database) {
 		categoryID, _ := strconv.Atoi(row[0])
 
 		category := bson.D{
-			{"id", categoryID},
+			{"_id", categoryID},
 			{"name", row[1]},
 		}
 
 		_, err := collection.InsertOne(ctx, category)
 		if err != nil {
-			log.Printf("Error adding category:%s: %v", categoryID, err)
+			log.Printf("Error adding category:%d: %v", categoryID, err)
 		}
 		count++
 	}
@@ -173,64 +174,34 @@ func migrateProducts(ctx context.Context, mdb *mongo.Database) {
 	count := 0
 	for _, row := range records[1:] {
 		productID, _ := strconv.Atoi(row[0])
+		categoryID, _ := strconv.Atoi(row[2])
 		price, _ := strconv.ParseFloat(row[3], 64)
 
 		product := bson.D{
-			{"id", productID},
+			{"_id", productID},
 			{"name", row[1]},
-			{"categoryId", row[2]},
+			{"categoryId", categoryID},
 			{"price", price},
 		}
 
 		_, err := collection.InsertOne(ctx, product)
 		if err != nil {
-			log.Printf("Error adding product:%s: %v", productID, err)
+			log.Printf("Error adding product:%d: %v", productID, err)
 		}
 		count++
 	}
 	fmt.Printf("    Loaded products: %d\n", count)
 }
 
-func migrateOrdersAndItems(ctx context.Context, mdb *mongo.Database) {
-	//Items
-	file, err := os.Open("Data_csv/orderitemid-orderid-productid-quantity-price.csv")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	reader := csv.NewReader(file)
-	itemRecords, err := reader.ReadAll()
-	if err != nil {
-		log.Fatal(err)
-	}
-	file.Close()
-
-	items := make(map[int][]bson.D, len(itemRecords))
-	for _, row := range itemRecords[1:] {
-		orderID, _ := strconv.Atoi(row[1])
-		orderItemID, _ := strconv.Atoi(row[0])
-		productID, _ := strconv.Atoi(row[2])
-
-		quantity, _ := strconv.ParseInt(row[3], 10, 64)
-		price, _ := strconv.ParseFloat(row[4], 64)
-
-		items[orderID] = append(items[orderID], bson.D{
-			{"id", orderItemID},
-			{"productId", productID},
-			{"quantity", quantity},
-			{"price", price},
-		})
-	}
-
-	//Orders
-	file, err = os.Open("Data_csv/orderid-userid-createdat-status.csv")
+func migrateOrders(ctx context.Context, mdb *mongo.Database) {
+	file, err := os.Open("Data_csv/orderid-userid-createdat-status.csv")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer file.Close()
 
-	reader = csv.NewReader(file)
-	itemRecords, err = reader.ReadAll()
+	reader := csv.NewReader(file)
+	itemRecords, err := reader.ReadAll()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -242,25 +213,59 @@ func migrateOrdersAndItems(ctx context.Context, mdb *mongo.Database) {
 		orderID, _ := strconv.Atoi(row[0])
 		userID, _ := strconv.Atoi(row[1])
 
-		itemsForOrder := items[orderID]
-		if itemsForOrder == nil {
-			itemsForOrder = []bson.D{}
-		}
-
 		order := bson.D{
-			{"id", orderID},
+			{"_id", orderID},
 			{"userId", userID},
 			{"createdAt", row[2]},
 			{"status", row[3]},
-			{"items", itemsForOrder},
 		}
 		_, err := collection.InsertOne(ctx, order)
 		if err != nil {
-			log.Printf("Error adding order:%s: %v", orderID, err)
+			log.Printf("Error adding order:%d: %v", orderID, err)
 		}
 		count++
 	}
 	fmt.Printf("    Loaded orders: %d\n", count)
+}
+
+func migrateOrderItems(ctx context.Context, mdb *mongo.Database) {
+	file, err := os.Open("Data_csv/orderitemid-orderid-productid-quantity-price.csv")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	itemRecords, err := reader.ReadAll()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	collection := mdb.Collection("orderItems")
+
+	count := 0
+	for _, row := range itemRecords[1:] {
+		orderItemID, _ := strconv.Atoi(row[0])
+		orderId, _ := strconv.Atoi(row[1])
+		productID, _ := strconv.Atoi(row[2])
+
+		quantity, _ := strconv.ParseInt(row[3], 10, 64)
+		price, _ := strconv.ParseFloat(row[4], 64)
+
+		orderItem := bson.D{
+			{"_id", orderItemID},
+			{"orderId", orderId},
+			{"productId", productID},
+			{"quantity", quantity},
+			{"price", price},
+		}
+		_, err := collection.InsertOne(ctx, orderItem)
+		if err != nil {
+			log.Printf("Error adding order item:%d: %v", orderItemID, err)
+		}
+		count++
+	}
+	fmt.Printf("    Loaded order items: %d\n", count)
 }
 
 func runIntegrityChecks(mdb *mongo.Database) {
