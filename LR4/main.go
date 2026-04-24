@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -30,20 +31,31 @@ func main() {
 	}
 	fmt.Println("Connected to Redis successfully")
 
-	runMenu(rdb)
+	// Connect to PostgreSQL
+	pgPool, err := pgxpool.New(ctx, "postgres://postgres:postgres@localhost:5432/lab4_db")
+	if err != nil {
+		log.Fatal("Failed to connect to PostgreSQL:", err)
+	}
+	defer pgPool.Close()
+	fmt.Println("Connected to PostgreSQL successfully")
+
+	runMenu(rdb, pgPool)
 
 }
 
-func runMenu(rdb *redis.Client) {
+func runMenu(rdb *redis.Client, pgPool *pgxpool.Pool) {
 	serv := Service{
 		rdb: rdb,
+	}
+	sqlServ := SQLService{
+		pool: pgPool,
 	}
 
 	r := bufio.NewReader(os.Stdin)
 
 	for {
-		fmt.Println("\n========== Redis Lab 4 ==========")
-		fmt.Println("1. Flush DB and migrate")
+		fmt.Println("\n========== Redis & SQL Lab 4 ==========")
+		fmt.Println("1. Flush DB and migrate (Both Redis & SQL)")
 		fmt.Println("2. GetRecentOrders for user")
 		fmt.Println("3. GetTopProducts")
 		fmt.Println("4. GetProductsByCategory")
@@ -59,16 +71,20 @@ func runMenu(rdb *redis.Client) {
 		switch choice {
 		case "1":
 			flushAndMigrate(rdb)
+			err := sqlServ.MigrateAndLoadCSV(ctx)
+			if err != nil {
+				fmt.Println("SQL Migration Error:", err)
+			}
 		case "2":
-			handleGetRecentOrders(r, &serv)
+			handleGetRecentOrders(r, &serv, &sqlServ)
 		case "3":
-			handleGetTopProducts(r, &serv)
+			handleGetTopProducts(r, &serv, &sqlServ)
 		case "4":
-			handleGetProductsByCategory(r, &serv)
+			handleGetProductsByCategory(r, &serv, &sqlServ)
 		case "5":
-			handleGetProductsByPrice(r, &serv)
+			handleGetProductsByPrice(r, &serv, &sqlServ)
 		case "6":
-			handleGetRecommendations(r, &serv)
+			handleGetRecommendations(r, &serv, &sqlServ)
 		case "7":
 			handleVerifyRecommendations(r, &serv)
 		case "8":
@@ -80,7 +96,7 @@ func runMenu(rdb *redis.Client) {
 	}
 }
 
-func handleGetTopProducts(r *bufio.Reader, serv *Service) {
+func handleGetTopProducts(r *bufio.Reader, serv *Service, sqlServ *SQLService) {
 	fmt.Print("Enter N (count): ")
 	nStr, _ := r.ReadString('\n')
 	nStr = strings.TrimSpace(nStr)
@@ -96,30 +112,41 @@ func handleGetTopProducts(r *bufio.Reader, serv *Service) {
 		sortBy = "sales"
 	}
 
+	fmt.Println("\n[REDIS RESULTS]")
 	stats, err := serv.GetTopProducts(ctx, n, sortBy)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
+		fmt.Printf("Redis Error: %v\n", err)
+	} else {
+		fmt.Printf("Top %d Products by %s:\n", len(stats), sortBy)
+		fmt.Printf("%-5s | %-30s | %-10s | %-10s\n", "ID", "Name", "Price", "Score")
+		fmt.Println(strings.Repeat("-", 60))
+		for _, s := range stats {
+			fmt.Printf("%-5d | %-30s | %-10.2f | %-10.2f\n", s.Product.ProductID, s.Product.Name, s.Product.Price, s.Score)
+		}
+		hits, misses := serv.GetCacheStats()
+		total := hits + misses
+		hitRate := 0.0
+		if total > 0 {
+			hitRate = float64(hits) / float64(total) * 100
+		}
+		fmt.Printf("Cache Stats - Hits: %d | Misses: %d | Hit Rate: %.1f%%\n", hits, misses, hitRate)
 	}
 
-	fmt.Printf("\nTop %d Products by %s:\n", len(stats), sortBy)
-	fmt.Printf("%-5s | %-30s | %-10s | %-10s\n", "ID", "Name", "Price", "Score")
-	fmt.Println(strings.Repeat("-", 60))
-	for _, s := range stats {
-		fmt.Printf("%-5d | %-30s | %-10.2f | %-10.2f\n", s.Product.ProductID, s.Product.Name, s.Product.Price, s.Score)
+	fmt.Println("\n[SQL RESULTS]")
+	sqlStats, err := sqlServ.GetTopProducts(ctx, n, sortBy)
+	if err != nil {
+		fmt.Printf("SQL Error: %v\n", err)
+	} else {
+		fmt.Printf("Top %d Products by %s:\n", len(sqlStats), sortBy)
+		fmt.Printf("%-5s | %-30s | %-10s | %-10s\n", "ID", "Name", "Price", "Score")
+		fmt.Println(strings.Repeat("-", 60))
+		for _, s := range sqlStats {
+			fmt.Printf("%-5d | %-30s | %-10.2f | %-10.2f\n", s.Product.ProductID, s.Product.Name, s.Product.Price, s.Score)
+		}
 	}
-
-	// Show cache statistics
-	hits, misses := serv.GetCacheStats()
-	total := hits + misses
-	hitRate := 0.0
-	if total > 0 {
-		hitRate = float64(hits) / float64(total) * 100
-	}
-	fmt.Printf("\nCache Stats - Hits: %d | Misses: %d | Hit Rate: %.1f%%\n", hits, misses, hitRate)
 }
 
-func handleGetProductsByCategory(r *bufio.Reader, serv *Service) {
+func handleGetProductsByCategory(r *bufio.Reader, serv *Service, sqlServ *SQLService) {
 	fmt.Print("Enter category ID: ")
 	idStr, _ := r.ReadString('\n')
 	idStr = strings.TrimSpace(idStr)
@@ -135,26 +162,38 @@ func handleGetProductsByCategory(r *bufio.Reader, serv *Service) {
 	maxStr = strings.TrimSpace(maxStr)
 	maxPrice, _ := strconv.ParseFloat(maxStr, 64)
 
+	fmt.Println("\n[REDIS RESULTS]")
 	products, err := serv.GetProductsByCategory(ctx, categoryID, minPrice, maxPrice)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	if len(products) == 0 {
+		fmt.Printf("Redis Error: %v\n", err)
+	} else if len(products) == 0 {
 		fmt.Println("Products not found.")
-		return
+	} else {
+		fmt.Printf("Products in category %d (Price filter: %.2f - %.2f):\n", categoryID, minPrice, maxPrice)
+		fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
+		fmt.Println(strings.Repeat("-", 65))
+		for _, p := range products {
+			fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+		}
 	}
 
-	fmt.Printf("\nProducts in category %d (Price filter: %.2f - %.2f):\n", categoryID, minPrice, maxPrice)
-	fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
-	fmt.Println(strings.Repeat("-", 65))
-	for _, p := range products {
-		fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+	fmt.Println("\n[SQL RESULTS]")
+	sqlProducts, err := sqlServ.GetProductsByCategory(ctx, categoryID, minPrice, maxPrice)
+	if err != nil {
+		fmt.Printf("SQL Error: %v\n", err)
+	} else if len(sqlProducts) == 0 {
+		fmt.Println("Products not found.")
+	} else {
+		fmt.Printf("Products in category %d (Price filter: %.2f - %.2f):\n", categoryID, minPrice, maxPrice)
+		fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
+		fmt.Println(strings.Repeat("-", 65))
+		for _, p := range sqlProducts {
+			fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+		}
 	}
 }
 
-func handleGetProductsByPrice(r *bufio.Reader, serv *Service) {
+func handleGetProductsByPrice(r *bufio.Reader, serv *Service, sqlServ *SQLService) {
 	fmt.Print("Enter minimal price: ")
 	minStr, _ := r.ReadString('\n')
 	minStr = strings.TrimSpace(minStr)
@@ -165,26 +204,38 @@ func handleGetProductsByPrice(r *bufio.Reader, serv *Service) {
 	maxStr = strings.TrimSpace(maxStr)
 	maxim, _ := strconv.ParseFloat(maxStr, 64)
 
+	fmt.Println("\n[REDIS RESULTS]")
 	products, err := serv.GetProductsByPriceRange(ctx, minim, maxim)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	if len(products) == 0 {
+		fmt.Printf("Redis Error: %v\n", err)
+	} else if len(products) == 0 {
 		fmt.Println("Products in this range not found.")
-		return
+	} else {
+		fmt.Printf("Products in range from %.2f to %.2f:\n", minim, maxim)
+		fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
+		fmt.Println(strings.Repeat("-", 65))
+		for _, p := range products {
+			fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+		}
 	}
 
-	fmt.Printf("\nProducts in range from %.2f to %.2f:\n", minim, maxim)
-	fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
-	fmt.Println(strings.Repeat("-", 65))
-	for _, p := range products {
-		fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+	fmt.Println("\n[SQL RESULTS]")
+	sqlProducts, err := sqlServ.GetProductsByPriceRange(ctx, minim, maxim)
+	if err != nil {
+		fmt.Printf("SQL Error: %v\n", err)
+	} else if len(sqlProducts) == 0 {
+		fmt.Println("Products in this range not found.")
+	} else {
+		fmt.Printf("Products in range from %.2f to %.2f:\n", minim, maxim)
+		fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
+		fmt.Println(strings.Repeat("-", 65))
+		for _, p := range sqlProducts {
+			fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+		}
 	}
 }
 
-func handleGetRecommendations(r *bufio.Reader, serv *Service) {
+func handleGetRecommendations(r *bufio.Reader, serv *Service, sqlServ *SQLService) {
 	fmt.Print("Enter User ID: ")
 	idStr, _ := r.ReadString('\n')
 	idStr = strings.TrimSpace(idStr)
@@ -198,22 +249,34 @@ func handleGetRecommendations(r *bufio.Reader, serv *Service) {
 		limit = 10
 	}
 
+	fmt.Println("\n[REDIS RESULTS]")
 	products, err := serv.GetSimilarUsersRecommendations(ctx, userID, limit)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	if len(products) == 0 {
+		fmt.Printf("Redis Error: %v\n", err)
+	} else if len(products) == 0 {
 		fmt.Println("No recommendations found.")
-		return
+	} else {
+		fmt.Printf("Recommendations for user %d:\n", userID)
+		fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
+		fmt.Println(strings.Repeat("-", 65))
+		for _, p := range products {
+			fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+		}
 	}
 
-	fmt.Printf("\nRecommendations for user %d:\n", userID)
-	fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
-	fmt.Println(strings.Repeat("-", 65))
-	for _, p := range products {
-		fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+	fmt.Println("\n[SQL RESULTS]")
+	sqlProducts, err := sqlServ.GetRecommendations(ctx, userID, limit)
+	if err != nil {
+		fmt.Printf("SQL Error: %v\n", err)
+	} else if len(sqlProducts) == 0 {
+		fmt.Println("No recommendations found.")
+	} else {
+		fmt.Printf("Recommendations for user %d:\n", userID)
+		fmt.Printf("%-5s | %-30s | %-12s | %-10s\n", "ID", "Name", "Category", "Price")
+		fmt.Println(strings.Repeat("-", 65))
+		for _, p := range sqlProducts {
+			fmt.Printf("%-5d | %-30s | %-12d | %-10.2f\n", p.ProductID, p.Name, p.CategoryID, p.Price)
+		}
 	}
 }
 
@@ -287,7 +350,7 @@ func flushAndMigrate(rdb *redis.Client) {
 	printStats(rdb)
 }
 
-func handleGetRecentOrders(r *bufio.Reader, serv *Service) {
+func handleGetRecentOrders(r *bufio.Reader, serv *Service, sqlServ *SQLService) {
 	fmt.Print("Enter User ID: ")
 	idStr, _ := r.ReadString('\n')
 	idStr = strings.TrimSpace(idStr)
@@ -301,32 +364,54 @@ func handleGetRecentOrders(r *bufio.Reader, serv *Service) {
 		limit = 10
 	}
 
+	fmt.Println("\n[REDIS RESULTS]")
 	orders, err := serv.GetRecentOrders(ctx, userID, limit)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	if len(orders) == 0 {
+		fmt.Printf("Redis Error: %v\n", err)
+	} else if len(orders) == 0 {
 		fmt.Println("No orders found.")
-		return
+	} else {
+		fmt.Printf("Recent %d orders for user %d:\n", len(orders), userID)
+		fmt.Println(strings.Repeat("=", 70))
+		for _, o := range orders {
+			fmt.Printf("Order #%d | %s | Status: %s\n", o.Order.OrderId, o.Order.CreatedAt, o.Order.Status)
+			fmt.Println(strings.Repeat("-", 50))
+			if len(o.Items) == 0 {
+				fmt.Println("  (no items)")
+			} else {
+				for _, item := range o.Items {
+					fmt.Printf("  |- Product: %s (ID: %d)\n", item.ProductName, item.ProductId)
+					fmt.Printf("  |  Quantity: %d | Price: %.2f | Total: %.2f\n",
+						item.Quantity, item.ProductPrice, float64(item.Quantity)*item.Price)
+				}
+			}
+			fmt.Println()
+		}
 	}
 
-	fmt.Printf("\nRecent %d orders for user %d:\n", len(orders), userID)
-	fmt.Println(strings.Repeat("=", 70))
-	for _, o := range orders {
-		fmt.Printf("Order #%d | %s | Status: %s\n", o.Order.OrderId, o.Order.CreatedAt, o.Order.Status)
-		fmt.Println(strings.Repeat("-", 50))
-		if len(o.Items) == 0 {
-			fmt.Println("  (no items)")
-		} else {
-			for _, item := range o.Items {
-				fmt.Printf("  |- Product: %s (ID: %d)\n", item.ProductName, item.ProductId)
-				fmt.Printf("  |  Quantity: %d | Price: %.2f | Total: %.2f\n",
-					item.Quantity, item.ProductPrice, float64(item.Quantity)*item.Price)
+	fmt.Println("\n[SQL RESULTS]")
+	sqlOrders, err := sqlServ.GetRecentOrders(ctx, userID, limit)
+	if err != nil {
+		fmt.Printf("SQL Error: %v\n", err)
+	} else if len(sqlOrders) == 0 {
+		fmt.Println("No orders found.")
+	} else {
+		fmt.Printf("Recent %d orders for user %d:\n", len(sqlOrders), userID)
+		fmt.Println(strings.Repeat("=", 70))
+		for _, o := range sqlOrders {
+			fmt.Printf("Order #%d | %s | Status: %s\n", o.Order.OrderId, o.Order.CreatedAt, o.Order.Status)
+			fmt.Println(strings.Repeat("-", 50))
+			if len(o.Items) == 0 {
+				fmt.Println("  (no items)")
+			} else {
+				for _, item := range o.Items {
+					fmt.Printf("  |- Product: %s (ID: %d)\n", item.ProductName, item.ProductId)
+					fmt.Printf("  |  Quantity: %d | Price: %.2f | Total: %.2f\n",
+						item.Quantity, item.ProductPrice, float64(item.Quantity)*item.Price)
+				}
 			}
+			fmt.Println()
 		}
-		fmt.Println()
 	}
 }
 
