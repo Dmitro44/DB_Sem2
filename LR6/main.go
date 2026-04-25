@@ -37,10 +37,8 @@ func runMenu(mcl *mongo.Client) {
 		fmt.Println("2. Run Integrity Checks")
 		fmt.Println("3. GetUserOrders")
 		fmt.Println("4. GetOrdersWithDetails")
-		fmt.Println("5. FilterProductsByPrice")
-		fmt.Println("6. GetRecommendations for user")
-		fmt.Println("7. VerifyRecommendations (debug)")
-		fmt.Println("8. Exit")
+		fmt.Println("5. GetTopProductsByRevenue")
+		fmt.Println("0. Exit")
 		fmt.Print("\nChoose option: ")
 
 		choice, _ := r.ReadString('\n')
@@ -55,15 +53,9 @@ func runMenu(mcl *mongo.Client) {
 			handleGetUserOrders(ctx, r, &serv)
 		case "4":
 			handleGetOrdersWithDetails(ctx, r, &serv)
-		// case "5":
-		// 	handleGetProductsByCategory(r, &serv)
-		// case "6":
-		// 	handleGetProductsByPrice(r, &serv)
-		// case "7":
-		// 	handleGetRecommendations(r, &serv)
-		// case "8":
-		// 	handleVerifyRecommendations(r, &serv)
-		case "9":
+		case "5":
+			handleGetTopProductsByRevenue(ctx, r, &serv)
+		case "0":
 			fmt.Println("Goodbye!")
 			os.Exit(0)
 		default:
@@ -372,7 +364,7 @@ func handleGetUserOrders(ctx context.Context, r *bufio.Reader, serv *Service) {
 }
 
 func handleGetOrdersWithDetails(ctx context.Context, r *bufio.Reader, serv *Service) {
-	fmt.Println("Provide order id: ")
+	fmt.Print("Provide order id: ")
 	idStr, _ := r.ReadString('\n')
 	idStr = strings.TrimSpace(idStr)
 	orderId, _ := strconv.Atoi(idStr)
@@ -407,5 +399,40 @@ func handleGetOrdersWithDetails(ctx context.Context, r *bufio.Reader, serv *Serv
 		}
 		fmt.Printf("Total Amount: %.2f\n", orderTotal)
 		fmt.Println(strings.Repeat("-", 55))
+	}
+}
+
+func handleGetTopProductsByRevenue(ctx context.Context, r *bufio.Reader, serv *Service) {
+	fmt.Print("Provide limit (default is 10): ")
+	limitStr, _ := r.ReadString('\n')
+	limitStr = strings.TrimSpace(limitStr)
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 {
+		limit = 10
+	}
+
+	products, err := serv.GetTopProductsByRevenue(ctx, limit)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	if len(products) == 0 {
+		fmt.Println("No products found.")
+		return
+	}
+
+	fmt.Printf("\n=== Top %d Products by Revenue ===\n", limit)
+	fmt.Printf("%-5s | %-23s | %-12s | %s\n", "ID", "Name", "Revenue", "Quantity Sold")
+	fmt.Println(strings.Repeat("-", 55))
+
+	for _, p := range products {
+		productID := p["productId"]
+		name := p["name"]
+		revenue := p["revenue"]
+		quantity := p["quantitySold"]
+
+		fmt.Printf("%-5v | %-23s | %-12v | %v\n",
+			productID, name, revenue, quantity)
 	}
 }

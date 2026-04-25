@@ -110,6 +110,55 @@ func (s *Service) GetOrdersWithDetails(ctx context.Context, orderId int) ([]Orde
 	return orders, nil
 }
 
-func (s *Service) GetTopProductsByRevenue(limit int) {
+func (s *Service) GetTopProductsByRevenue(ctx context.Context, limit int) ([]bson.M, error) {
 
+	pipeline := mongo.Pipeline{
+		// GROUP BY productId, SUM(quantity * price)
+		{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: "$productId"},
+			{Key: "totalRevenue", Value: bson.D{
+				{Key: "$sum", Value: bson.D{
+					{Key: "$multiply", Value: bson.A{"$quantity", "$price"}},
+				}},
+			}},
+			{Key: "totalQuantity", Value: bson.D{{Key: "$sum", Value: "$quantity"}}},
+		}}},
+
+		// ORDER BY totalRevenue DESC
+		{{Key: "$sort", Value: bson.D{{Key: "totalRevenue", Value: -1}}}},
+
+		// LIMIT
+		{{Key: "$limit", Value: limit}},
+
+		// JOIN with products to get names
+		{{Key: "$lookup", Value: bson.D{
+			{Key: "from", Value: "products"},
+			{Key: "localField", Value: "_id"},
+			{Key: "foreignField", Value: "_id"},
+			{Key: "as", Value: "product_info"},
+		}}},
+
+		// Unwind product_info (array -> object)
+		{{Key: "$unwind", Value: "$product_info"}},
+
+		// SELECT productId, name, revenue
+		{{Key: "$project", Value: bson.D{
+			{Key: "productId", Value: "$_id"},
+			{Key: "name", Value: "$product_info.name"},
+			{Key: "revenue", Value: "$totalRevenue"},
+			{Key: "quantitySold", Value: "$totalQuantity"},
+		}}},
+	}
+
+	cursor, err := s.mdb.Collection("orderItems").Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []bson.M
+	if err := cursor.All(ctx, &result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
