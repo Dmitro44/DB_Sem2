@@ -284,7 +284,7 @@ func runIntegrityChecks(mdb *mongo.Database) {
 		{{Key: "$lookup", Value: bson.D{
 			{Key: "from", Value: "users"},
 			{Key: "localField", Value: "userId"},
-			{Key: "foreignField", Value: "id"},
+			{Key: "foreignField", Value: "_id"},
 			{Key: "as", Value: "user_details"},
 		}}},
 		{{Key: "$match", Value: bson.D{
