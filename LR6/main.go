@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -38,6 +39,7 @@ func runMenu(mcl *mongo.Client) {
 		fmt.Println("3. GetUserOrders")
 		fmt.Println("4. GetOrdersWithDetails")
 		fmt.Println("5. GetTopProductsByRevenue")
+		fmt.Println("6. Run Performance Tests (indexes)")
 		fmt.Println("0. Exit")
 		fmt.Print("\nChoose option: ")
 
@@ -55,6 +57,8 @@ func runMenu(mcl *mongo.Client) {
 			handleGetOrdersWithDetails(ctx, r, &serv)
 		case "5":
 			handleGetTopProductsByRevenue(ctx, r, &serv)
+		case "6":
+			handlePerformanceTest(ctx, mdb)
 		case "0":
 			fmt.Println("Goodbye!")
 			os.Exit(0)
@@ -435,4 +439,140 @@ func handleGetTopProductsByRevenue(ctx context.Context, r *bufio.Reader, serv *S
 		fmt.Printf("%-5v | %-23s | %-12v | %v\n",
 			productID, name, revenue, quantity)
 	}
+}
+
+func generatePerformanceData(ctx context.Context, mdb *mongo.Database) {
+	fmt.Println("Generating performance test data (50,000 orders)...")
+
+	coll := mdb.Collection("orders")
+
+	_ = coll.Drop(ctx)
+
+	var docs []any
+	batchSize := 2000
+	totalOrders := 50000
+
+	now := time.Now()
+
+	for i := 1; i <= totalOrders; i++ {
+		userID := (i % 100) + 1
+		createdTime := now.Add(-time.Duration(i) * time.Minute)
+
+		doc := bson.D{
+			{Key: "_id", Value: i},
+			{Key: "userId", Value: userID},
+			{Key: "createdAt", Value: createdTime.Format(time.RFC3339)}, // format like in csv
+			{Key: "status", Value: "completed"},
+		}
+
+		docs = append(docs, doc)
+
+		// Insert batches instead of one by one
+		if len(docs) >= batchSize {
+			_, err := coll.InsertMany(ctx, docs)
+			if err != nil {
+				log.Printf("Error inserting batch: %v", err)
+			}
+			docs = []any{} // free up slice
+
+			if i%10000 == 0 {
+				fmt.Printf("  Generated %d / %d\n", i, totalOrders)
+			}
+		}
+	}
+
+	if len(docs) > 0 {
+		_, _ = coll.InsertMany(ctx, docs)
+	}
+
+	fmt.Println("Generation complete.")
+}
+
+func handlePerformanceTest(ctx context.Context, mdb *mongo.Database) {
+	fmt.Println("\n=== Performance Test (Large Data) ===")
+
+	mdb.Drop(ctx)
+
+	generatePerformanceData(ctx, mdb)
+
+	collName := "orders"
+
+	filter := bson.D{{Key: "userId", Value: 1}}
+	sort := bson.D{{Key: "createdAt", Value: -1}}
+
+	fmt.Println("\n--- WITHOUT INDEX ---")
+	printStats(ctx, mdb, collName, filter, sort, nil)
+
+	fmt.Println("\nCreating index: { userId: 1, createdAt: -1 } ...")
+	mdb.Collection(collName).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "userId", Value: 1}, {Key: "createdAt", Value: -1}},
+	})
+	fmt.Println("Index created.")
+
+	fmt.Println("\n--- WITH INDEX ---")
+	hint := bson.D{{Key: "userId", Value: 1}, {Key: "createdAt", Value: -1}}
+	printStats(ctx, mdb, collName, filter, sort, hint)
+}
+
+// converts bson.D to default go map
+func toMap(v any) map[string]any {
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	if d, ok := v.(bson.D); ok {
+		m := make(map[string]any)
+		for _, e := range d {
+			m[e.Key] = e.Value
+		}
+		return m
+	}
+	return make(map[string]any)
+}
+
+func printStats(ctx context.Context, db *mongo.Database, collName string, filter, sort, hint bson.D) {
+	findCmd := bson.D{
+		{Key: "find", Value: collName},
+		{Key: "filter", Value: filter},
+		{Key: "sort", Value: sort},
+	}
+	if hint != nil {
+		findCmd = append(findCmd, bson.E{Key: "hint", Value: hint})
+	}
+
+	// Exec explain command
+	var res bson.M
+	err := db.RunCommand(ctx, bson.D{
+		{Key: "explain", Value: findCmd},
+		{Key: "verbosity", Value: "executionStats"},
+	}).Decode(&res)
+
+	if err != nil {
+		fmt.Printf("Error running explain: %v\n", err)
+		return
+	}
+
+	// Safe parse through toMap
+	execStats := toMap(res["executionStats"])
+	queryPlanner := toMap(res["queryPlanner"])
+	winningPlan := toMap(queryPlanner["winningPlan"])
+
+	stage, _ := winningPlan["stage"].(string)
+
+	getNum := func(k string) int64 {
+		switch v := execStats[k].(type) {
+		case int32:
+			return int64(v)
+		case int64:
+			return v
+		case float64:
+			return int64(v)
+		default:
+			return 0
+		}
+	}
+
+	fmt.Printf("Stage: %s\n", stage)
+	fmt.Printf("Docs Examined: %d\n", getNum("totalDocsExamined"))
+	fmt.Printf("Execution Time (ms): %d\n", getNum("executionTimeMillis"))
+	fmt.Println("----------------------------------")
 }
