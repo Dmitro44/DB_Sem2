@@ -38,10 +38,11 @@ services:
     command: redis-server --appendonly yes
 
   mongodb:
-    image: mongo
+    image: mongo:8.0
     ports:
       - "27017:27017"
     environment:
+      - GLIBC_TUNABLES=glibc.cpu.hwcaps=-SHSTK
       - MONGO_INITDB_DATABASE=lr6_db
       - MONGO_INITDB_ROOT_USERNAME=admin
       - MONGO_INITDB_ROOT_PASSWORD=password
