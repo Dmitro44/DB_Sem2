@@ -293,7 +293,7 @@ func (s *SQLService) GetTopProducts(ctx context.Context, n int64, sortBy string)
 			FROM products p
 			LEFT JOIN order_items oi ON p.product_id = oi.product_id
 			GROUP BY p.product_id
-            ORDER BY score DESC
+            ORDER BY score DESC, price DESC
     		LIMIT $1
 		`
 	} else {
@@ -302,7 +302,7 @@ func (s *SQLService) GetTopProducts(ctx context.Context, n int64, sortBy string)
 			FROM products p
 			LEFT JOIN order_items oi ON p.product_id = oi.product_id
 			GROUP BY p.product_id
-            ORDER BY score DESC
+            ORDER BY score DESC, price DESC
     		LIMIT $1
 		`
 	}

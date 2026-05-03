@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -148,6 +149,13 @@ func (s *Service) GetTopProducts(ctx context.Context, n int64, sortBy string) ([
 			Score:   z.Score,
 		})
 	}
+
+	sort.Slice(stats, func(i, j int) bool {
+		if stats[i].Score != stats[j].Score {
+			return stats[i].Score > stats[j].Score
+		}
+		return stats[i].Product.Price > stats[j].Product.Price
+	})
 
 	// Store in cache with 60-second TTL
 	data, _ := json.Marshal(stats)
