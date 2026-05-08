@@ -162,3 +162,29 @@ func (s *Service) GetTopProductsByRevenue(ctx context.Context, limit int) ([]bso
 
 	return result, nil
 }
+
+func (s *Service) GetCustomStats(ctx context.Context, start, end string) ([]bson.M, error) {
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.D{{Key: "createdAt", Value: bson.D{
+			{Key: "$gte", Value: start},
+			{Key: "$lt", Value: end},
+		}}}}},
+		{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: "$status"},
+			{Key: "count", Value: bson.D{{Key: "$sum", Value: 1}}},
+		}}},
+		{{Key: "$sort", Value: bson.D{{Key: "count", Value: -1}}}},
+	}
+
+	cursor, err := s.mdb.Collection("orders").Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []bson.M
+	if err := cursor.All(ctx, &result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}

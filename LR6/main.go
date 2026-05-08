@@ -40,6 +40,7 @@ func runMenu(mcl *mongo.Client) {
 		fmt.Println("4. GetOrdersWithDetails")
 		fmt.Println("5. GetTopProductsByRevenue")
 		fmt.Println("6. Run Performance Tests (indexes)")
+		fmt.Println("7. Custom Stats")
 		fmt.Println("0. Exit")
 		fmt.Print("\nChoose option: ")
 
@@ -59,6 +60,8 @@ func runMenu(mcl *mongo.Client) {
 			handleGetTopProductsByRevenue(ctx, r, &serv)
 		case "6":
 			handlePerformanceTest(ctx, mdb)
+		case "7":
+			handleDefenseTemplate(ctx, r, &serv)
 		case "0":
 			fmt.Println("Goodbye!")
 			os.Exit(0)
@@ -362,7 +365,6 @@ func handleGetUserOrders(ctx context.Context, r *bufio.Reader, serv *Service) {
 		fmt.Printf("\nOrder ID:  %d\n", o.ID)
 		fmt.Printf("Date:      %s\n", o.CreatedAt)
 		fmt.Printf("Status:    %s\n", o.Status)
-		fmt.Printf("Items:\n")
 		fmt.Println(strings.Repeat("-", 45))
 	}
 }
@@ -575,4 +577,64 @@ func printStats(ctx context.Context, db *mongo.Database, collName string, filter
 	fmt.Printf("Docs Examined: %d\n", getNum("totalDocsExamined"))
 	fmt.Printf("Execution Time (ms): %d\n", getNum("executionTimeMillis"))
 	fmt.Println("----------------------------------")
+}
+
+func handleDefenseTemplate(ctx context.Context, r *bufio.Reader, serv *Service) {
+	fmt.Print("Start (YYYY-MM-DD or YYYY-MM-DD HH:MM): ")
+	startDateStr, _ := r.ReadString('\n')
+	startDateStr = strings.TrimSpace(startDateStr)
+
+	fmt.Print("End (YYYY-MM-DD or YYYY-MM-DD HH:MM): ")
+	endDateStr, _ := r.ReadString('\n')
+	endDateStr = strings.TrimSpace(endDateStr)
+
+	parseDefenseTime := func(input string, isEnd bool) (time.Time, string, error) {
+		if t, err := time.ParseInLocation("2006-01-02 15:04", input, time.Local); err == nil {
+			return t, t.Format(time.RFC3339), nil
+		}
+
+		t, err := time.ParseInLocation("2006-01-02", input, time.Local)
+		if err != nil {
+			return time.Time{}, "", err
+		}
+
+		if isEnd {
+			t = time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, t.Location())
+		} else {
+			t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+		}
+
+		return t, t.Format(time.RFC3339), nil
+	}
+
+	startDate, startRFC3339, err := parseDefenseTime(startDateStr, false)
+	if err != nil {
+		fmt.Printf("Invalid Start value: %v\n", err)
+		return
+	}
+
+	endDate, endRFC3339, err := parseDefenseTime(endDateStr, true)
+	if err != nil {
+		fmt.Printf("Invalid End value: %v\n", err)
+		return
+	}
+
+	results, err := serv.GetCustomStats(ctx, startRFC3339, endRFC3339)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	fmt.Println("\n=== Custom Stats ===")
+	fmt.Printf("Query range: %s -> %s\n", startDate.Format(time.RFC3339), endDate.Format(time.RFC3339))
+	if len(results) == 0 {
+		fmt.Println("No results found.")
+		return
+	}
+
+	for _, row := range results {
+		fmt.Printf("%v\n", row)
+	}
+
+	_ = ctx
 }
