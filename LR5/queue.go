@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -43,7 +44,15 @@ func (s *Service) PushTask(ctx context.Context, queueName string, taskType strin
 		return err
 	}
 
-	return s.db.LPush(ctx, queueName, taskBytes).Err()
+	fmt.Println()
+	// Логируем ДО отправки, пока точно знаем, что задачи ещё нет в очереди
+	log.Printf("[Producer] Pushing task %s (type=%s)...", task.ID, taskType)
+
+	if err := s.db.LPush(ctx, queueName, taskBytes).Err(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *Service) StartWorker(ctx context.Context, queueName string) {
@@ -63,13 +72,17 @@ func (s *Service) StartWorker(ctx context.Context, queueName string) {
 				continue
 			}
 
+			log.Printf("[Worker] Popped task from queue. Raw: %s", res[1])
+
 			var task Task
 			if err := json.Unmarshal([]byte(res[1]), &task); err != nil {
 				log.Printf("Worker failed to unmarshal task: %v", err)
 				continue
 			}
 
+			log.Printf("[Worker] Processing task %s (type=%s)...", task.ID, task.Type)
 			s.processTask(task)
+			log.Printf("[Worker] Task %s completed", task.ID)
 		}
 	}
 }

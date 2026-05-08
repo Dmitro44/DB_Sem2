@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -57,6 +58,10 @@ func main() {
 	}
 
 	time.Sleep(2 * time.Second)
+	finalLen, _ := rdb.LLen(ctx, queueName).Result()
+	log.Printf("Final queue length: %d", finalLen)
+
+	fmt.Printf("\n\n\n")
 
 	log.Println("--- Demonstrating Fixed vs Sliding Window difference ---")
 	testUserID := "diff_user"
