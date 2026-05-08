@@ -88,14 +88,22 @@
 
 #stp2024.listing[Lua-скрипт для скользящего окна][
   ```
+  local key = KEYS[1]
+  local limit = tonumber(ARGV[1])
+  local window_ms = tonumber(ARGV[2])
+  local now_ms = tonumber(ARGV[3])
   local clear_before = now_ms - window_ms
+  local member = ARGV[4]
+
   redis.call('ZREMRANGEBYSCORE', key, '-inf', clear_before)
   local count = redis.call('ZCARD', key)
+
   if count < limit then
-      redis.call('ZADD', key, now_ms, member)
-      redis.call('PEXPIRE', key, window_ms)
-      return 1
+  	redis.call('ZADD', key, now_ms, member)
+  	redis.call('PEXPIRE', key, window_ms)
+  	return 1
   end
+
   return 0
   ```
 ]
