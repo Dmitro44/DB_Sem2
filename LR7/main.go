@@ -342,108 +342,6 @@ func runIntegrityChecks(mdb *mongo.Database) {
 	}
 }
 
-func handleGetUserOrders(ctx context.Context, r *bufio.Reader, serv *Service) {
-
-	fmt.Print("Provide user id: ")
-	idStr, _ := r.ReadString('\n')
-	idStr = strings.TrimSpace(idStr)
-	userId, _ := strconv.Atoi(idStr)
-
-	orders, err := serv.GetUserOrders(ctx, userId)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	if len(orders) == 0 {
-		fmt.Println("No orders found.")
-		return
-	}
-
-	fmt.Printf("\nFound %d orders for user %d:\n", len(orders), userId)
-	for _, o := range orders {
-		fmt.Printf("\nOrder ID:  %d\n", o.ID)
-		fmt.Printf("Date:      %s\n", o.CreatedAt)
-		fmt.Printf("Status:    %s\n", o.Status)
-		fmt.Printf("Items:\n")
-		fmt.Println(strings.Repeat("-", 45))
-	}
-}
-
-func handleGetOrdersWithDetails(ctx context.Context, r *bufio.Reader, serv *Service) {
-	fmt.Print("Provide order id: ")
-	idStr, _ := r.ReadString('\n')
-	idStr = strings.TrimSpace(idStr)
-	orderId, _ := strconv.Atoi(idStr)
-
-	orders, err := serv.GetOrdersWithDetails(ctx, orderId)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	if len(orders) == 0 {
-		fmt.Println("No orders found.")
-		return
-	}
-
-	for _, o := range orders {
-		fmt.Printf("\nOrder ID:  %d\n", o.ID)
-		fmt.Printf("User ID:   %d\n", o.UserID)
-		fmt.Printf("Date:      %s\n", o.CreatedAt)
-		fmt.Printf("Status:    %s\n", o.Status)
-		fmt.Printf("Items Details:\n")
-		var orderTotal float64
-		for _, item := range o.Items {
-			lineTotal := float64(item.Quantity) * item.Price
-			orderTotal += lineTotal
-			productName := item.ProductDetails.Name
-			if productName == "" {
-				productName = "Unknown Product"
-			}
-			fmt.Printf("  - %-20s | Qty: %-2d | Price: %-8.2f | Total: %.2f\n",
-				productName, item.Quantity, item.Price, lineTotal)
-		}
-		fmt.Printf("Total Amount: %.2f\n", orderTotal)
-		fmt.Println(strings.Repeat("-", 55))
-	}
-}
-
-func handleGetTopProductsByRevenue(ctx context.Context, r *bufio.Reader, serv *Service) {
-	fmt.Print("Provide limit (default is 10): ")
-	limitStr, _ := r.ReadString('\n')
-	limitStr = strings.TrimSpace(limitStr)
-	limit, _ := strconv.Atoi(limitStr)
-	if limit <= 0 {
-		limit = 10
-	}
-
-	products, err := serv.GetTopProductsByRevenue(ctx, limit)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	if len(products) == 0 {
-		fmt.Println("No products found.")
-		return
-	}
-
-	fmt.Printf("\n=== Top %d Products by Revenue ===\n", limit)
-	fmt.Printf("%-5s | %-23s | %-12s | %s\n", "ID", "Name", "Revenue", "Quantity Sold")
-	fmt.Println(strings.Repeat("-", 55))
-
-	for _, p := range products {
-		productID := p["productId"]
-		name := p["name"]
-		revenue := p["revenue"]
-		quantity := p["quantitySold"]
-
-		fmt.Printf("%-5v | %-23s | %-12v | %v\n",
-			productID, name, revenue, quantity)
-	}
-}
-
 func generatePerformanceData(ctx context.Context, mdb *mongo.Database) {
 	fmt.Println("Generating performance test data (50,000 orders)...")
 
@@ -672,7 +570,7 @@ func handleStockTransfer(ctx context.Context, serv *Service) {
 func handleIsolationTest(ctx context.Context, serv *Service) {
 	fmt.Println("\n=== Isolation Test: Race Condition Simulation ===")
 	productID := 99
-	initialStock := 1
+	initialStock := 2
 
 	serv.mdb.Collection("inventory").UpdateOne(ctx,
 		bson.D{{Key: "productId", Value: productID}, {Key: "warehouse", Value: "Shop"}},
@@ -683,7 +581,7 @@ func handleIsolationTest(ctx context.Context, serv *Service) {
 	fmt.Printf("Initial stock for Product %d: %d\n", productID, initialStock)
 	fmt.Println("Simulating two users trying to buy the last item simultaneously...")
 
-	done := make(chan string, 2)
+	done := make(chan string, 3)
 
 	buy := func(userName string) {
 		err := serv.BuyLastItem(ctx, productID, userName)
@@ -696,7 +594,9 @@ func handleIsolationTest(ctx context.Context, serv *Service) {
 
 	go buy("Alice")
 	go buy("Bob")
+	go buy("Diam")
 
+	fmt.Println(<-done)
 	fmt.Println(<-done)
 	fmt.Println(<-done)
 
