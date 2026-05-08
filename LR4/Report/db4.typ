@@ -50,7 +50,7 @@
 Миграция осуществлялась путем последовательного чтения файлов #emph("CSV") и записи данных в соответствующие структуры #emph("Redis"). Для ускорения доступа к агрегатам при загрузке данных формировались дополнительные индексы в виде упорядоченных множеств (например, #emph("products:by_price")).
 
 #stp2024.listing[Миграция данных о товарах и создание индексов по цене][
-  ```go
+  ```
   // Создание Hash для товара
   rdb.HSet(ctx, fmt.Sprintf("product:%s", productID), map[string]any{
       "product_id":  productID,
@@ -72,24 +72,66 @@
 Метод #emph("GetRecentOrders") выполняет сопоставление связанных сущностей. Сначала извлекаются идентификаторы заказов из списка пользователя (#emph("List")), затем для каждого заказа запрашиваются его атрибуты из #emph("Hash"), позиции из множества (#emph("Set")) и детальная информация о товарах.
 
 #stp2024.listing[GetRecentOrders в Redis][
-  ```go
-  orderIDs, _ := s.rdb.LRange(ctx, key, 0, limit-1).Result()
-  for _, id := range orderIDs {
-      s.rdb.HGetAll(ctx, fmt.Sprintf("order:%s", id)).Scan(&order)
-      orderItemIDs, _ := s.rdb.SMembers(ctx, fmt.Sprintf("order:%s:items", id)).Result()
-      // ...
-  }
+  ```
+  key := fmt.Sprintf("user:%d:orders", userId)
+	orderIDs, err := s.rdb.LRange(ctx, key, 0, limit-1).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	var orders []OrderWithItems
+
+	for _, id := range orderIDs {
+		var order Order
+		orderKey := fmt.Sprintf("order:%s", id)
+
+		err := s.rdb.HGetAll(ctx, orderKey).Scan(&order)
+		if err != nil {
+			return nil, err
+		}
+
+		// Get order items
+		orderItemsKey := fmt.Sprintf("order:%s:items", id)
+		orderItemIDs, _ := s.rdb.SMembers(ctx, orderItemsKey).Result()
+
+		var items []OrderItemWithProduct
+		for _, itemID := range orderItemIDs {
+			var item OrderItem
+			itemKey := fmt.Sprintf("order_item:%s", itemID)
+			err := s.rdb.HGetAll(ctx, itemKey).Scan(&item)
+			if err != nil {
+				continue
+			}
+
+			// Get product details
+			var product Product
+			productKey := fmt.Sprintf("product:%d", item.ProductId)
+			s.rdb.HGetAll(ctx, productKey).Scan(&product)
+
+			items = append(items, OrderItemWithProduct{
+				OrderItem:    item,
+				ProductName:  product.Name,
+				ProductPrice: product.Price,
+			})
+		}
+
+		orders = append(orders, OrderWithItems{
+			Order: order,
+			Items: items,
+		})
+	}
+	return orders, nil
   ```
 ]
 
 Аналогичный запрос в PostgreSQL:
 
 #stp2024.listing[GetRecentOrders в PostgreSQL][
-  ```sql
-  SELECT order_id, user_id, created_at, status 
-  FROM orders 
-  WHERE user_id = $1 
-  ORDER BY created_at DESC 
+  ```
+  SELECT order_id, user_id, created_at, status
+  FROM orders
+  WHERE user_id = $1
+  ORDER BY created_at DESC
   LIMIT $2
   ```
 ]
@@ -99,18 +141,18 @@
 Метод #emph("GetTopProducts") возвращает список наиболее продаваемых товаров. Для оптимизации используется строковый ключ с параметрами запроса. Если данные присутствуют в кэше, они возвращаются немедленно. В противном случае выполняется выборка из #emph("ZSet") (#emph("ZREVRANGE")), данные сериализуются в #emph("JSON") и сохраняются в кэш на 60 секунд.
 
 #stp2024.listing[Реализация кэширования с TTL][
-  ```go
+  ```
   cached, err := s.rdb.Get(ctx, cacheKey).Result()
   if err == nil {
       s.CacheHits++
       json.Unmarshal([]byte(cached), &stats)
       return stats, nil
   }
-  
+
   // Выборка из индекса при промахе кэша
   results, _ := s.rdb.ZRevRangeWithScores(ctx, zsetKey, 0, n-1).Result()
   // ... формирование результата ...
-  
+
   data, _ := json.Marshal(stats)
   s.rdb.Set(ctx, cacheKey, data, 60*time.Second)
   ```
@@ -121,7 +163,7 @@
 Для реализации функции #emph("GetProductsByCategory") использовались упорядоченные множества, где ключом выступает идентификатор категории, а весом — цена товара. Это позволяет эффективно ограничивать выборку диапазоном цен с помощью команды #emph("ZRANGEBYSCORE").
 
 #stp2024.listing[GetProductsByCategory в Redis][
-  ```go
+  ```
   productIDs, _ := s.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
       Key:     fmt.Sprintf("category:%d:products", categoryID),
       ByScore: true,
@@ -134,9 +176,9 @@
 Аналогичный запрос в PostgreSQL:
 
 #stp2024.listing[GetProductsByCategory в PostgreSQL][
-  ```sql
-  SELECT product_id, name, category_id, price 
-  FROM products 
+  ```
+  SELECT product_id, name, category_id, price
+  FROM products
   WHERE category_id = $1
     AND price >= $2
     AND price <= $3
@@ -154,13 +196,13 @@
 + #[Исключение товаров, которые текущий пользователь уже приобрел (#emph("SDIFF")).]
 
 #stp2024.listing[Выполнение теоретико-множественных операций для рекомендаций][
-  ```go
+  ```
   // Поиск пересечения (похожие пользователи)
   commonProducts, _ := s.rdb.SInter(ctx, userPurchasedKey, otherUserKey).Result()
-  
+
   // Объединение товаров от похожих пользователей
   allSimilarProducts, _ := s.rdb.SUnion(ctx, similarUserKeys...).Result()
-  
+
   // Вычитание уже купленных товаров
   recommendations, _ := s.rdb.SDiff(ctx, tempKey, userPurchasedKey).Result()
   ```
@@ -169,7 +211,7 @@
 Аналогичный запрос в PostgreSQL с использованием CTE:
 
 #stp2024.listing[Рекомендации в PostgreSQL][
-  ```sql
+  ```
   WITH target_user_products AS (
       SELECT DISTINCT product_id
       FROM order_items oi
