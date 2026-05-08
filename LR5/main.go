@@ -74,8 +74,10 @@ func main() {
 
 	log.Println(">>> Phase 1: Sending 3 requests at the END of window")
 	for i := 1; i <= 3; i++ {
-		svc.RateLimitSimple(ctx, testUserID, limit, window)
-		svc.RateLimitSlidingWindow(ctx, testUserID, limit, window)
+		simple, _ := svc.RateLimitSimple(ctx, testUserID, limit, window)
+		sliding, _ := svc.RateLimitSlidingWindow(ctx, testUserID, limit, window)
+
+		log.Printf("Request %d: Simple Counter allowed: %v | Sliding Window allowed: %v", i, simple, sliding)
 	}
 
 	log.Println(">>> Waiting 3 seconds (crossing the fixed window boundary)...")
@@ -86,7 +88,7 @@ func main() {
 		simple, _ := svc.RateLimitSimple(ctx, testUserID, limit, window)
 		sliding, _ := svc.RateLimitSlidingWindow(ctx, testUserID, limit, window)
 
-		log.Printf("Request %d: Simple Counter allowed: %v | Sliding Window allowed: %v", i, simple, sliding)
+		log.Printf("Request %d: Simple Counter allowed: %v | Sliding Window allowed: %v", 3+i, simple, sliding)
 	}
 
 	log.Println("Shutting down...")
