@@ -25,7 +25,7 @@
 
   на тему
 
-  #upper[#text(weight: "bold")["Redis. очереди"]]
+  #upper[#text(weight: "bold")["Redis, очереди"]]
   // #v(1em)
 
   БГУИР 6-05-0612-02 23
